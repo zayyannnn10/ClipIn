@@ -1,0 +1,61 @@
+# ClipIn cloud: the phone starts this with a link; it makes the clips and publishes them to the `clips` branch.
+# Each stage is its own step, so the phone can show live progress from the step list.
+name: clip
+run-name: "clip ${{ inputs.job }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Job id (made by the phone)"
+        required: true
+      options:
+        description: "Job settings as JSON (link, length, template...)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  clip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      JOB_ID: ${{ inputs.job }}
+      JOB_OPTIONS: ${{ inputs.options }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      YT_COOKIES: ${{ secrets.YT_COOKIES }}
+      GH_TOKEN: ${{ github.token }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Get ready
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install tools
+        run: |
+          echo ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true | sudo debconf-set-selections
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg ttf-mscorefonts-installer fonts-dejavu-core > /dev/null
+          python -m pip install -q --upgrade pip
+          python -m pip install -q -r cloud/requirements.txt
+          if [ -z "$GROQ_API_KEY" ]; then python -m pip install -q faster-whisper; fi
+          mkdir -p models
+          curl -sSL -o models/face_detection_yunet_2023mar.onnx \
+            https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+
+      - name: Download
+        run: python -m cloud.run download
+      - name: Transcribe
+        run: python -m cloud.run transcribe
+      - name: Find moments
+        run: python -m cloud.run highlights
+      - name: Render clips
+        run: python -m cloud.run render
+      - name: Publish
+        run: python -m cloud.run publish
+      - name: Report problem
+        if: failure()
+        run: python -m cloud.run fail

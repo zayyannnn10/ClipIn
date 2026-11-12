@@ -1,0 +1,7 @@
+projects/
+config/
+logs/
+models/
+work_error.txt
+__pycache__/
+*.pyc

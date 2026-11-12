@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ClipIn">
+<meta name="theme-color" content="#050506">
+<title>ClipIn AI</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<!-- first start: connect to the cloud -->
+<section id="connect" class="screen hidden">
+  <div class="connect-box">
+    <img src="icons/icon-192.png" class="connect-logo" alt="">
+    <h1>ClipIn <span class="ai">AI</span></h1>
+    <p class="muted">Turn long videos into viral shorts. Clips are made in your own free cloud, so they keep
+      cooking when you leave the app.</p>
+    <label class="field-label" for="code">Connect code</label>
+    <textarea id="code" rows="3" placeholder="Paste the code from ClipIn on your laptop (Settings → Phone)"></textarea>
+    <button id="connectBtn" class="btn primary wide">Connect</button>
+    <p id="connectMsg" class="msg"></p>
+  </div>
+</section>
+
+<!-- main app -->
+<main id="app" class="hidden">
+  <header class="top">
+    <div class="brand"><span class="pill-logo"></span>ClipIn <span class="ai">AI</span></div>
+    <div id="cloudState" class="cloud-state"></div>
+  </header>
+
+  <!-- CREATE -->
+  <section id="tab-create" class="tab">
+    <h1 class="hero">Long video<br>→ <span class="glow">viral shorts</span></h1>
+    <div class="linkbar">
+      <input id="url" type="url" inputmode="url" autocomplete="off" autocorrect="off" spellcheck="false"
+             placeholder="Paste a YouTube link">
+      <button id="pasteBtn" class="btn ghost small">Paste</button>
+    </div>
+    <button id="goBtn" class="btn primary wide big">Get clips</button>
+    <p id="goMsg" class="msg"></p>
+
+    <div class="section-title">Template</div>
+    <div id="templates" class="hscroll"></div>
+
+    <div class="section-title">Clips</div>
+    <div class="seg" id="seg-length"></div>
+    <div class="seg" id="seg-count"></div>
+    <div class="seg" id="seg-format"></div>
+
+    <details class="more">
+      <summary>More options</summary>
+      <div class="section-title">Framing</div>
+      <div class="seg" id="seg-layout"></div>
+      <div class="section-title">Captions</div>
+      <div id="captionGrid" class="cap-grid"></div>
+      <div class="toggles">
+        <label class="tog"><input type="checkbox" id="opt-hook"><span>Hook text</span></label>
+        <label class="tog"><input type="checkbox" id="opt-zoom"><span>Zoom cuts</span></label>
+        <label class="tog"><input type="checkbox" id="opt-bar"><span>Progress bar</span></label>
+      </div>
+      <div class="section-title">Language</div>
+      <select id="opt-lang"></select>
+      <div class="section-title">Focus (optional)</div>
+      <input id="opt-focus" type="text" placeholder="e.g. funny moments, money tips">
+    </details>
+
+    <div id="activeWrap" class="hidden">
+      <div class="section-title">Working on</div>
+      <div id="active"></div>
+      <p class="note">You can close ClipIn or lock your phone. Clips keep being made in the cloud.</p>
+    </div>
+  </section>
+
+  <!-- CLIPS -->
+  <section id="tab-clips" class="tab hidden">
+    <div class="tab-head"><h2>Your clips</h2><button id="refreshBtn" class="btn ghost small">Refresh</button></div>
+    <div id="jobs"></div>
+    <p id="jobsEmpty" class="muted center hidden">No clips yet. Paste a link on the Create tab.</p>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="tab-settings" class="tab hidden">
+    <h2>Settings</h2>
+    <div class="card">
+      <div class="row"><span>Cloud</span><b id="setRepo"></b></div>
+      <div class="row"><span>Status</span><b id="setStatus">…</b></div>
+      <button id="reconnectBtn" class="btn ghost wide">Change connect code</button>
+    </div>
+    <div class="card">
+      <p class="muted small">ClipIn makes clips on GitHub's free cloud computers. AI keys stay in your private
+        GitHub settings, never on this phone. Finished clips are kept for your last 20 videos.</p>
+      <button id="updateBtn" class="btn ghost wide">Check for app update</button>
+    </div>
+    <p class="muted center small" id="version"></p>
+  </section>
+
+  <nav class="tabbar">
+    <button data-tab="create" class="on"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Create</button>
+    <button data-tab="clips"><svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="3"/><path d="M10.5 9.5v5l4-2.5z" class="fill"/></svg>Clips<i id="badge" class="badge hidden"></i></button>
+    <button data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.07-.4.1-.8.1-1.2z"/></svg>Settings</button>
+  </nav>
+</main>
+
+<!-- full-screen clip player (swipe up/down) -->
+<div id="player" class="player hidden">
+  <button id="closePlayer" class="icon-btn close" aria-label="Close">✕</button>
+  <div id="slides" class="slides"></div>
+</div>
+
+<!-- bottom sheet: AI title / description / hashtags -->
+<div id="sheet" class="sheet hidden">
+  <div class="sheet-card">
+    <div class="grab"></div>
+    <h3>Upload details <span class="muted small" id="sheetAi"></span></h3>
+    <label class="field-label">Title</label>
+    <input id="shTitle" type="text">
+    <label class="field-label">Description</label>
+    <textarea id="shDesc" rows="4"></textarea>
+    <label class="field-label">Hashtags</label>
+    <textarea id="shTags" rows="3"></textarea>
+    <div class="sheet-btns">
+      <button id="copyTags" class="btn ghost">Copy hashtags</button>
+      <button id="copyAll" class="btn primary">Copy all</button>
+    </div>
+    <button id="closeSheet" class="btn ghost wide">Done</button>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
