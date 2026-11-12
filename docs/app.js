@@ -312,7 +312,7 @@ function openPlayer(res, start) {
   slides.innerHTML = clips.map((c, i) => `<section class="slide" data-i="${i}">
       <img class="poster" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain">
       <div class="info"><div class="score"><small>SCORE</small><b>${c.score}</b></div>
-        <b>${esc(details(c).title)}</b><span>${esc(c.reason || c.hook || '')}</span>
+        <b>${esc(details(c).title)}</b>
         <div class="tags">${esc(details(c).tags)}</div></div>
       <div class="actions">
         <button class="act wait" data-a="yt"><span class="ic yt"><svg viewBox="0 0 24 24"><path d="M10 8.5v7l5.5-3.5z" fill="#fff" stroke="none"/></svg></span>YouTube</button>

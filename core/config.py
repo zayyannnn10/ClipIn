@@ -31,6 +31,9 @@ DEFAULTS = {
         "cookies_file": "",            # a cookies.txt exported from the browser (works while it's open)
         "connected": False,            # last "Connect YouTube" check succeeded
     },
+    "phone": {
+        "repo": "",                    # username/clipin - the GitHub repository that runs the phone cloud
+    },
     "storage": {
         "keep_source": False,          # False = delete a downloaded video once its clips are made
     },
@@ -54,7 +57,7 @@ DEFAULTS = {
     },
 }
 
-SECRET_KEYS = {"gemini_api_key": "", "groq_api_key": ""}
+SECRET_KEYS = {"gemini_api_key": "", "groq_api_key": "", "github_token": ""}
 
 
 def _merge(base, over):
