@@ -151,4 +151,5 @@ def fetch(url, outdir: Path, on_progress, section=None, name="source"):
         "title": info.get("title") or "",
         "duration": float(info.get("duration") or 0),
         "channel": info.get("uploader") or info.get("channel") or "",
+        "heatmap": info.get("heatmap") or [],
     }

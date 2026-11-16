@@ -175,3 +175,12 @@ details.more summary::after { content: " ▾"; }
   background: #fff; color: #050506; font-weight: 650; font-size: 14px; padding: 11px 18px; border-radius: 999px;
   opacity: 0; transition: 0.25s; z-index: 50; pointer-events: none; max-width: 90%; text-align: center; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* clips being made */
+.thumb.making { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px;
+  font-weight: 600; background: linear-gradient(110deg, #17171c 30%, #23232b 50%, #17171c 70%); background-size: 250% 100%;
+  animation: shimmer 1.6s infinite linear; }
+@keyframes shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+.live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--lime); margin-right: 6px;
+  box-shadow: 0 0 8px var(--lime); animation: pulse 1.2s infinite; vertical-align: 1px; }
+@keyframes pulse { 50% { opacity: 0.35; } }

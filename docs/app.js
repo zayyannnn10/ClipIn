@@ -1,7 +1,7 @@
 /* ClipIn phone app. Talks only to GitHub: starts a cloud run with the link, follows its steps for live
    progress, and shows the finished clips from the `clips` branch. No AI keys on the phone. */
 'use strict';
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const $ = s => document.querySelector(s);
 const store = {
   get(k, d) { try { const v = JSON.parse(localStorage.getItem('clipin.' + k)); return v ?? d; } catch { return d; } },
@@ -185,87 +185,81 @@ async function start() {
     pending.unshift({ job, url, created: Date.now(), stage: 'Waiting for a cloud computer', pct: 0 });
     store.set('pending', pending);
     $('#url').value = ''; setMsg(msg, '');
-    toast('Started! You can leave the app.');
-    drawActive(); schedule(3000);
+    toast('Started! It shows in Clips. You can leave the app.', 3500);
+    drawActive(); showTab('clips'); schedule(3000);
   } catch (e) { setMsg(msg, e.message, 'err'); }
   finally { $('#goBtn').disabled = false; }
 }
 
-const LAPTOP = new Set(['laptop', 'laptop-working']);
-const laptopJobs = () => index.filter(j => LAPTOP.has(j.status));
-const finishedJobs = () => index.filter(j => !LAPTOP.has(j.status));
+const ACTIVE = new Set(['working', 'laptop', 'laptop-working']);    // jobs still being made
+const activeJobs = () => index.filter(j => ACTIVE.has(j.status));
+const finishedJobs = () => index.filter(j => !ACTIVE.has(j.status));
+function stageOf(j) {
+  if (j.status === 'laptop') return '💻 Waiting for your laptop — open ClipIn on it';
+  return (j.status === 'laptop-working' ? '💻 ' : '') + (j.stage || 'Working');
+}
 function drawActive() {
-  const lap = laptopJobs();
-  $('#activeWrap').classList.toggle('hidden', !pending.length && !lap.length);
-  $('#active').innerHTML = lap.map(j => `<div class="job-live">
+  const act = activeJobs();
+  $('#activeWrap').classList.toggle('hidden', !pending.length && !act.length);
+  $('#active').innerHTML = act.map(j => `<div class="job-live">
       <div class="t">${esc(j.title || 'Video')}</div>
-      <div class="bar indet"><i></i></div>
-      <div class="s"><span>💻 ${esc(j.status === 'laptop' ? 'Waiting for your laptop — open ClipIn on it' : (j.stage || 'Your laptop is working'))}</span>
-        <span>${j.created ? ago(j.created * 1000) : ''}</span></div>
+      <div class="bar ${j.total ? '' : 'indet'}"><i style="width:${j.total ? Math.round(100 * (j.clips || 0) / j.total) : 0}%"></i></div>
+      <div class="s"><span>${esc(stageOf(j))}</span><span>${j.created ? ago(j.created * 1000) : ''}</span></div>
     </div>`).join('') + pending.map(p => `<div class="job-live">
       <div class="t">${esc(p.title || p.url)}</div>
       <div class="bar ${p.pct ? '' : 'indet'}"><i style="width:${Math.round((p.pct || 0) * 100)}%"></i></div>
       <div class="s"><span>${esc(p.stage || 'Starting')}</span><span>${p.pct ? Math.round(p.pct * 100) + '%' : ''} · ${ago(p.created)}</span></div>
     </div>`).join('');
-  const n = pending.length + lap.length;
+  $('#active').onclick = () => showTab('clips');
+  const n = pending.length + act.length;
   const b = $('#badge'); b.textContent = n; b.classList.toggle('hidden', !n);
 }
 
-// following cloud runs ------------------------------------------------------------------------------------
+// following jobs ------------------------------------------------------------------------------------------
 let timer = null, busy = false;
 function schedule(ms) { clearTimeout(timer); timer = setTimeout(tick, ms); }
+function onClipsTab() { return !$('#tab-clips').classList.contains('hidden'); }
 async function tick() {
   if (busy || !cfg) return; busy = true;
   try {
-    if (!pending.length && laptopJobs().length) {
-      const before = new Set(laptopJobs().map(j => j.job));
-      await loadIndex();
-      if ([...before].some(id => !laptopJobs().some(j => j.job === id))) { toast('Your clips are ready 🎬'); drawJobs(); }
-      drawActive();
-    }
+    const was = new Map(activeJobs().map(j => [j.job, j]));
+    if (pending.length || was.size) await loadIndex();
     if (pending.length) {
       const runs = (await gh(`${repo()}/actions/workflows/clip.yml/runs?per_page=30&event=workflow_dispatch`)).workflow_runs || [];
-      let finished = false;
       for (const p of pending) {
         const run = runs.find(r => r.display_title === 'clip ' + p.job);
-        if (!run) { if (Date.now() - p.created > 10 * 60e3) { p.stage = 'The cloud did not start this job'; p.dead = true; } continue; }
-        p.run = run.id;
-        if (run.status === 'queued' || run.status === 'waiting' || run.status === 'pending') { p.stage = 'Waiting for a free cloud computer'; p.pct = 0.01; continue; }
-        if (run.status === 'completed') { finished = true; p.done = Date.now(); p.conclusion = run.conclusion; continue; }
-        const jobs = (await gh(`${repo()}/actions/runs/${run.id}/jobs`)).jobs || [];
-        const steps = (jobs[0] || {}).steps || [];
-        let pct = 0, total = STEPS.reduce((a, s) => a + s[1], 0), label = STEPS[0][2];
-        for (const [name, w, say] of STEPS) {
-          const s = steps.find(x => x.name === name);
-          if (!s) continue;
-          if (s.status === 'completed') pct += w;
-          else if (s.status === 'in_progress') { pct += w / 2; label = say; }
-        }
-        p.pct = Math.max(0.02, pct / total); p.stage = label;
+        if (!run) { if (Date.now() - p.created > 10 * 60e3) p.dead = true; continue; }
+        if (['queued', 'waiting', 'pending'].includes(run.status)) { p.stage = 'Waiting for a free cloud computer'; p.pct = 0.01; continue; }
+        if (run.status === 'completed') { p.done = p.done || Date.now(); p.conclusion = run.conclusion; continue; }
+        p.stage = 'Checking the video'; p.pct = 0.03;
       }
-      if (finished) await loadIndex();
-      // drop jobs that are now in the index (done or failed); keep waiting a bit for the publish to show up
       const known = new Set(index.map(j => j.job));
-      const before = pending.length;
       pending = pending.filter(p => {
-        if (known.has(p.job)) return false;
+        if (known.has(p.job)) {
+          const j = index.find(x => x.job === p.job);
+          if (j.status === 'laptop') toast('YouTube blocked the cloud — your laptop will make these clips 💻', 4500);
+          return false;
+        }
         if (p.done && Date.now() - p.done > 90e3) { notePhoneError(p, `The cloud run ${p.conclusion || 'stopped'} without saving clips.`); return false; }
         if (p.dead) { notePhoneError(p, 'GitHub never started this job. Check Actions are enabled for the repository.'); return false; }
         return true;
       });
-      if (pending.length < before) {
-        const handed = index.some(j => LAPTOP.has(j.status) && !pending.some(p => p.job === j.job));
-        if (finishedJobs().length) drawJobs();
-        toast(handed && laptopJobs().length ? 'YouTube blocked the cloud — your laptop will make these clips 💻' : 'Your clips are ready 🎬', 4000);
-      }
-      store.set('pending', pending); drawActive();
+      store.set('pending', pending);
     }
+    for (const [id, old] of was) {                // a job finished, or new clips arrived
+      const now = index.find(j => j.job === id);
+      if (now && !ACTIVE.has(now.status)) toast(now.error ? 'A video failed — see the Clips tab' : 'All your clips are ready 🎬', 3500);
+      else if (now && (now.clips || 0) > (old.clips || 0)) toast(`Clip ${now.clips} is ready`, 2200);
+    }
+    drawActive();
+    if (onClipsTab()) drawJobs();
   } catch (e) { console.warn(e); $('#cloudState').textContent = 'offline'; }
   finally { busy = false; }
-  schedule(pending.length ? (document.hidden ? 30000 : 5000) : laptopJobs().length ? 15000 : 60000);
+  const live = pending.length || activeJobs().length;
+  schedule(live ? (document.hidden ? 30000 : 8000) : 60000);
 }
 function notePhoneError(p, msg) {
-  index.unshift({ job: p.job, title: p.url, created: p.created / 1000, clips: 0, error: msg, local: true });
+  index.unshift({ job: p.job, title: p.url, created: p.created / 1000, clips: 0, error: msg, local: true, status: 'error' });
   store.set('index', index);
 }
 
@@ -278,40 +272,62 @@ async function loadIndex() {
   $('#cloudState').textContent = 'cloud ready'; $('#cloudState').classList.add('on');
   return index;
 }
-async function getResult(job) {
-  if (results[job]) return results[job];
+async function getResult(job, fresh = false) {
+  if (results[job] && !fresh) return results[job];
   const text = await gh(`${repo()}/contents/jobs/${job}/result.json?ref=clips`, { raw: true });
   if (!text) return null;
-  results[job] = JSON.parse(text);
-  const keep = Object.keys(results).slice(-25); for (const k of Object.keys(results)) if (!keep.includes(k)) delete results[k];
-  store.set('results', results);
-  return results[job];
+  const res = JSON.parse(text);
+  if (!fresh) {                                  // finished results never change, so keep them
+    results[job] = res;
+    const keep = Object.keys(results).slice(-25); for (const k of Object.keys(results)) if (!keep.includes(k)) delete results[k];
+    store.set('results', results);
+  }
+  return res;
 }
 
-// clips tab -----------------------------------------------------------------------------------------------
+// clips tab: jobs in progress first (clips appear one by one), then finished ones ----------------------------
 async function drawJobs() {
   const box = $('#jobs');
-  const list = finishedJobs();
+  const live = [...pending.map(p => ({ job: p.job, title: p.url, created: p.created / 1000, status: 'starting', stage: p.stage || 'Starting' })),
+    ...activeJobs()];
+  const list = [...live, ...finishedJobs()];
   $('#jobsEmpty').classList.toggle('hidden', list.length > 0);
-  box.innerHTML = list.map(j => `<div class="job" data-job="${esc(j.job)}">
-      <h3>${esc(j.title || 'Untitled video')}</h3>
-      <div class="meta">${j.created ? ago(j.created * 1000) : ''}${j.error ? '' : ` · ${j.clips} clips`}${j.by === 'laptop' ? ' · made on your laptop' : ''}</div>
-      ${j.error ? `<div class="err">${esc(j.error)}</div>` : '<div class="thumbs"></div>'}
-    </div>`).join('');
-  for (const j of list) {
-    if (j.error) continue;
-    getResult(j.job).then(async res => {
-      const el = box.querySelector(`.job[data-job="${j.job}"] .thumbs`);
-      if (!el || !res) return;
-      const fmt = (res.options || {}).format || '9:16';
-      const cls = fmt === '1:1' ? 'sq' : fmt === '16:9' ? 'wide' : '';
-      const clips = res.clips.filter(c => c.file);
-      el.innerHTML = clips.map((c, i) => `<div class="thumb ${cls}" data-i="${i}"><img alt="" loading="lazy">
-        <div class="dur">${mmss(c.duration)}</div><div class="score"><small>SCORE</small><b>${c.score}</b></div></div>`).join('');
-      el.onclick = e => { const t = e.target.closest('.thumb'); if (t) openPlayer(res, +t.dataset.i); };
-      [...el.querySelectorAll('img')].forEach(async (img, i) => { if (clips[i].thumb) img.src = await mediaUrl(clips[i].thumb); });
-    }).catch(() => { });
+  const sig = list.map(j => `${j.job}:${j.status}:${j.clips}:${j.stage}`).join('|');
+  if (box.dataset.sig !== sig) {
+    box.dataset.sig = sig;
+    box.innerHTML = list.map(j => {
+      const working = j.status === 'starting' || ACTIVE.has(j.status);
+      const meta = working ? `<span class="live-dot"></span>${esc(stageOf(j))}`
+        : `${j.created ? ago(j.created * 1000) : ''}${j.error ? '' : ` · ${j.clips} clips`}${j.by === 'laptop' ? ' · made on your laptop' : ''}`;
+      return `<div class="job" data-job="${esc(j.job)}">
+        <h3>${esc(j.title || 'Untitled video')}</h3><div class="meta">${meta}</div>
+        ${j.error ? `<div class="err">${esc(j.error)}</div>` : `<div class="thumbs">${working ? skeletons(3) : ''}</div>`}
+      </div>`;
+    }).join('');
   }
+  for (const j of list) {
+    if (j.error || j.status === 'starting') continue;
+    const working = ACTIVE.has(j.status);
+    if (working && !j.total) continue;            // moments not picked yet
+    getResult(j.job, working).then(res => fillThumbs(box, j, res, working)).catch(() => { });
+  }
+}
+function skeletons(n) { return Array.from({ length: n }, () => '<div class="thumb making"><span>Making…</span></div>').join(''); }
+function fillThumbs(box, j, res, working) {
+  const el = box.querySelector(`.job[data-job="${j.job}"] .thumbs`);
+  if (!el || !res) return;
+  const fmt = (res.options || {}).format || '9:16';
+  const cls = fmt === '1:1' ? 'sq' : fmt === '16:9' ? 'wide' : '';
+  const ready = res.clips.filter(c => c.file);
+  const waiting = working ? res.clips.filter(c => !c.file && c.status !== 'error') : [];
+  const key = j.job + ':' + ready.length + ':' + waiting.length;
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.innerHTML = ready.map((c, i) => `<div class="thumb ${cls}" data-i="${i}"><img alt="" loading="lazy">
+      <div class="dur">${mmss(c.duration)}</div><div class="score"><small>SCORE</small><b>${c.score}</b></div></div>`).join('')
+    + waiting.map(c => `<div class="thumb ${cls} making"><span>Making…</span><div class="score"><small>SCORE</small><b>${c.score}</b></div></div>`).join('');
+  el.onclick = e => { const t = e.target.closest('.thumb[data-i]'); if (t) openPlayer({ ...res, clips: ready }, +t.dataset.i); };
+  [...el.querySelectorAll('img')].forEach(async (img, i) => { if (ready[i].thumb) img.src = await mediaUrl(ready[i].thumb); });
 }
 
 // player --------------------------------------------------------------------------------------------------

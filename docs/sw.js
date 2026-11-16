@@ -1,6 +1,6 @@
 /* ClipIn phone offline copy: the app itself opens instantly and offline; GitHub (runs, clips) always goes
    to the network. Bump VERSION when the app files change so phones pick up the new copy. */
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const CACHE = 'clipin-' + VERSION;
 const CAPS = ['bold_pop', 'two_tone', 'one_word', 'neon', 'fire', 'ice', 'rainbow', 'pastel', 'karaoke', 'boxed',
   'typewriter', 'clean', 'subtitle'].map(n => `captions/${n}.png`);

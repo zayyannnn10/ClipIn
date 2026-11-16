@@ -6,6 +6,9 @@ Used by the GitHub cloud worker and by the laptop (when it makes clips for the p
                                error         something failed (see "error")
                                laptop        YouTube blocked the cloud; waiting for the laptop
                                laptop-working  the laptop is making the clips ("stage" says what it's doing)
+                               working       the cloud is making the clips
+                             While a job is working, result.json already lists the picked moments and each clip
+                             is added as soon as it's rendered, so the phone can show them one by one.
   jobs/<job>/request.json    the link and options the phone sent (for the laptop)
   jobs/<job>/result.json     clips, scores, AI titles and hashtags
   jobs/<job>/<clip>.mp4/.jpg the clips and thumbnails
@@ -83,8 +86,9 @@ def set_entry(remote, job, say=print, request=None, **fields):
     return update(remote, change, say, f"{job}: {fields.get('status', 'update')}")
 
 
-def publish(remote, job, result, files, say=print):
-    """Save a finished (or failed) job: clips, thumbnails, result.json, and its index line."""
+def publish(remote, job, result, files, say=print, status=None, stage=""):
+    """Save a job's clips, thumbnails, result.json and index line. status=None means finished (done/error);
+    pass "working"/"laptop-working" to publish clips while the rest are still being made."""
     def change(w, index):
         d = w / "jobs" / job
         d.mkdir(parents=True, exist_ok=True)
@@ -94,13 +98,16 @@ def publish(remote, job, result, files, say=print):
         index = [j for j in index if j.get("job") != job]
         index.insert(0, {"job": job, "title": result.get("title", ""), "created": result.get("created"),
                          "clips": len([c for c in result.get("clips", []) if c.get("file")]),
-                         "error": result.get("error", ""), "status": "error" if result.get("error") else "done",
+                         "error": result.get("error", ""),
+                         "status": status or ("error" if result.get("error") else "done"), "stage": stage,
+                         "total": len(result.get("clips", [])),
                          "by": result.get("by", "cloud"),
                          "thumb": next((c["thumb"] for c in result.get("clips", []) if c.get("thumb")), "")})
         index.sort(key=lambda j: -(j.get("created") or 0))
         return index
     update(remote, change, say, f"clips for {job}")
-    say(f"Published {len(files)} files")
+    if not status:
+        say(f"Published {len(files)} files")
 
 
 def build(job, p, by="cloud"):

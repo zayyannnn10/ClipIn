@@ -105,6 +105,8 @@ def check():
         output("blocked", "true")
     else:
         say(f"Video OK: {title}")
+        clipsbranch.set_entry(remote(), JOB, say, title=title or url, status="working",
+                              stage="Downloading the video", created=CREATED)
         output("blocked", "false")
 
 
@@ -126,7 +128,8 @@ def download():
     save({"id": JOB, "source": url, "title": info.get("title") or "", "channel": info.get("channel", ""),
           "created": CREATED, "options": opts, "status": "running", "stage": "download", "error": "",
           "source_file": str(path), "width": meta["width"], "height": meta["height"], "fps": meta["fps"],
-          "has_audio": meta["has_audio"], "duration": info.get("duration") or meta["duration"], "clips": []})
+          "has_audio": meta["has_audio"], "duration": info.get("duration") or meta["duration"], "clips": [],
+          "heatmap": info.get("heatmap") or []})
     if not meta["has_audio"]:
         raise RuntimeError("This video has no sound, so there's nothing to transcribe.")
     say(f"Video ready: {info.get('title')} ({project.fmt_time(meta['duration'])})")
@@ -147,13 +150,23 @@ def highlights():
     t = json.loads((PDIR / "transcript.json").read_text(encoding="utf-8"))
     o = p["options"]
     clips, used = hl.find(t, p.get("title", ""), int(o.get("count", 6)), o.get("length", "30-60"),
-                          o.get("focus", ""), lambda f, m="": say(m) if m else None)
+                          o.get("focus", ""), lambda f, m="": say(m) if m else None, heatmap=p.get("heatmap"))
     for c in clips:
         c.update(status="queued", layout=o.get("layout", "auto"), caption_style=o.get("caption_style", "Bold Pop"),
                  hook_on=bool(o.get("hook_on", True)))
     p["clips"], p["ai_used"] = clips, used
     save(p)
     say(f"{len(clips)} moments picked by {used}")
+    partial(p, f"Picked {len(clips)} moments — making the clips")
+
+
+def partial(p, stage):
+    """Publish what's ready so far, so the phone shows clips one by one."""
+    try:
+        result, files = clipsbranch.build(JOB, p, by="cloud")
+        clipsbranch.publish(remote(), JOB, result, files, say, status="working", stage=stage)
+    except Exception as e:
+        say(f"(couldn't update the phone yet: {e})")
 
 
 def render():
@@ -174,6 +187,7 @@ def render():
         except Exception as e:
             say(f"  no AI hashtags: {e}")
         save(p)
+        partial(p, f"{i} of {len(p['clips'])} clips ready")
     if not any(c.get("status") == "done" for c in p["clips"]):
         raise RuntimeError("No clip could be rendered.")
 
