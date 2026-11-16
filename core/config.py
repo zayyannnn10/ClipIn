@@ -124,9 +124,10 @@ def friday_key(name):
 
 
 def key(name):
-    env = os.environ.get(name.upper(), "").strip()    # GitHub cloud worker: keys come from repo secrets
-    if env:
-        return env
+    if os.environ.get("GITHUB_ACTIONS") == "true":    # GitHub cloud worker: keys come from repo secrets
+        env = os.environ.get(name.upper(), "").strip()  # (never on the laptop: other tools set these too)
+        if env:
+            return env
     own = str(secrets.get(name) or "").strip()
     if own:
         return own

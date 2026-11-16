@@ -92,16 +92,17 @@ def _gemini_models(client):
             if "generateContent" in (m.supported_actions or []):
                 names.append(m.name.replace("models/", ""))
     except Exception as e:
-        if any(x in str(e) for x in ("API_KEY_INVALID", "PERMISSION_DENIED", "401", "403")):
-            raise AIError("Gemini rejected the API key") from None
-        log.warning("Gemini model list: %s", e)
+        # newer restricted keys may not be allowed to list models but can still generate; the
+        # generate call below decides whether the key really works
+        log.warning("Gemini model list unavailable (%s), using known models", str(e)[:120])
 
     def ver(n):
         m = re.search(r"-(\d+(?:\.\d+)?)", n)
         return float(m.group(1)) if m else 0.0
     flash = sorted((n for n in names if re.fullmatch(r"gemini-[\d.]+-flash(-preview)?", n)),
                    key=lambda n: (-ver(n), "preview" in n))
-    _gem_models[:] = list(dict.fromkeys(flash[:4] + ["gemini-flash-latest", "gemini-2.5-flash"]))
+    known = [] if flash else ["gemini-3.6-flash", "gemini-3.5-flash"]
+    _gem_models[:] = list(dict.fromkeys(flash[:4] + known + ["gemini-flash-latest", "gemini-2.5-flash"]))
     return _gem_models
 
 
