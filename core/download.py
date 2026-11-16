@@ -41,8 +41,14 @@ def _needs_signin(msg):
 
 
 def _cookie_opts():
+    from core import youtube_signin
     from core.config import cfg
     f = (cfg.get("download.cookies_file") or "").strip().strip('"')
+    if f and Path(f) == youtube_signin.COOKIES and youtube_signin.signed_in_before():
+        try:
+            youtube_signin.export()            # fresh login from ClipIn's sign-in browser
+        except Exception as e:
+            log.warning("Couldn't refresh the YouTube login: %s", e)
     if f and Path(f).is_file():
         return {"cookiefile": f}
     b = (cfg.get("download.cookies_browser") or "none").lower()
@@ -104,16 +110,8 @@ def fetch(url, outdir: Path, on_progress, section=None, name="source"):
         from yt_dlp.utils import download_range_func
         opts["download_ranges"] = download_range_func(None, [section])
         # no re-encode: MP4 edit lists make playback start at the asked time, and it takes seconds, not minutes
-    from core import youtube_signin
-    from core.config import cfg
-    f = (cfg.get("download.cookies_file") or "").strip()
-    if f and Path(f) == youtube_signin.COOKIES and youtube_signin.signed_in_before():
-        try:
-            youtube_signin.export()            # fresh login from ClipIn's sign-in browser
-        except Exception as e:
-            log.warning("Couldn't refresh the YouTube login: %s", e)
-    if f and Path(f).is_file():
-        opts["cookiefile"] = f                 # a cookies.txt is safe to use every time
+    # The YouTube login is only a backup: sending it with every download makes YouTube answer
+    # "The page needs to be reloaded" for many videos. It's used below only when YouTube asks to sign in.
     info, msg = None, ""
     try:
         info = _run(yt_dlp, opts, url)
