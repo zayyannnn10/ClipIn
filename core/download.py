@@ -1,5 +1,6 @@
 """Download a YouTube (or any yt-dlp supported) video as source.mp4, up to 1080p."""
 import re
+import time
 from pathlib import Path
 
 from core import media
@@ -24,6 +25,9 @@ class _Logger:
 
     def error(self, msg):
         log.error("yt-dlp: %s", msg)
+
+
+CLIENT_FALLBACKS = [["tv_simply"], ["web_safari"], ["mweb"], ["tv"], ["android_vr"], ["web_embedded"]]
 
 
 def _run(yt_dlp, opts, url):
@@ -110,12 +114,26 @@ def fetch(url, outdir: Path, on_progress, section=None, name="source"):
             log.warning("Couldn't refresh the YouTube login: %s", e)
     if f and Path(f).is_file():
         opts["cookiefile"] = f                 # a cookies.txt is safe to use every time
+    info, msg = None, ""
     try:
         info = _run(yt_dlp, opts, url)
     except Exception as e:
         msg = str(e).replace("ERROR: ", "")
-        if not _needs_signin(msg):
+        if not _needs_signin(msg) and "429" not in msg:
             raise RuntimeError(f"Couldn't download the video: {msg[:300]}") from None
+    if info is None:
+        # YouTube treats its different players differently; on cloud servers some still get through
+        for clients in CLIENT_FALLBACKS:
+            on_progress(0.0, f"YouTube blocked the normal player, trying the {clients[0]} player...")
+            time.sleep(2)
+            try:
+                info = _run(yt_dlp, {**opts, "extractor_args": {"youtube": {"player_client": clients}}}, url)
+                log.info("Downloaded with the %s player", clients[0])
+                break
+            except Exception as e:
+                msg = str(e).replace("ERROR: ", "")
+                log.warning("%s player: %s", clients[0], msg[:160])
+    if info is None:
         extra = _cookie_opts()
         if not extra:
             raise RuntimeError("YouTube asked to sign in (bot check). Open Settings → YouTube sign-in and pick "
