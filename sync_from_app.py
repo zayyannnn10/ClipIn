@@ -5,7 +5,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 APP = HERE.parent / "ClipIn AI"
-SKIP = {"youtube_upload.py", "worker.py", "previews.py", "github_setup.py"}      # laptop-only
+SKIP = {"youtube_upload.py", "worker.py", "previews.py", "github_setup.py", "phone_jobs.py"}      # laptop-only
 
 
 def main():

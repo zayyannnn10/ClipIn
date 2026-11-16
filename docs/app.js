@@ -1,7 +1,7 @@
 /* ClipIn phone app. Talks only to GitHub: starts a cloud run with the link, follows its steps for live
    progress, and shows the finished clips from the `clips` branch. No AI keys on the phone. */
 'use strict';
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const $ = s => document.querySelector(s);
 const store = {
   get(k, d) { try { const v = JSON.parse(localStorage.getItem('clipin.' + k)); return v ?? d; } catch { return d; } },
@@ -191,14 +191,24 @@ async function start() {
   finally { $('#goBtn').disabled = false; }
 }
 
+const LAPTOP = new Set(['laptop', 'laptop-working']);
+const laptopJobs = () => index.filter(j => LAPTOP.has(j.status));
+const finishedJobs = () => index.filter(j => !LAPTOP.has(j.status));
 function drawActive() {
-  $('#activeWrap').classList.toggle('hidden', !pending.length);
-  $('#active').innerHTML = pending.map(p => `<div class="job-live">
+  const lap = laptopJobs();
+  $('#activeWrap').classList.toggle('hidden', !pending.length && !lap.length);
+  $('#active').innerHTML = lap.map(j => `<div class="job-live">
+      <div class="t">${esc(j.title || 'Video')}</div>
+      <div class="bar indet"><i></i></div>
+      <div class="s"><span>💻 ${esc(j.status === 'laptop' ? 'Waiting for your laptop — open ClipIn on it' : (j.stage || 'Your laptop is working'))}</span>
+        <span>${j.created ? ago(j.created * 1000) : ''}</span></div>
+    </div>`).join('') + pending.map(p => `<div class="job-live">
       <div class="t">${esc(p.title || p.url)}</div>
       <div class="bar ${p.pct ? '' : 'indet'}"><i style="width:${Math.round((p.pct || 0) * 100)}%"></i></div>
       <div class="s"><span>${esc(p.stage || 'Starting')}</span><span>${p.pct ? Math.round(p.pct * 100) + '%' : ''} · ${ago(p.created)}</span></div>
     </div>`).join('');
-  const b = $('#badge'); b.textContent = pending.length; b.classList.toggle('hidden', !pending.length);
+  const n = pending.length + lap.length;
+  const b = $('#badge'); b.textContent = n; b.classList.toggle('hidden', !n);
 }
 
 // following cloud runs ------------------------------------------------------------------------------------
@@ -207,6 +217,12 @@ function schedule(ms) { clearTimeout(timer); timer = setTimeout(tick, ms); }
 async function tick() {
   if (busy || !cfg) return; busy = true;
   try {
+    if (!pending.length && laptopJobs().length) {
+      const before = new Set(laptopJobs().map(j => j.job));
+      await loadIndex();
+      if ([...before].some(id => !laptopJobs().some(j => j.job === id))) { toast('Your clips are ready 🎬'); drawJobs(); }
+      drawActive();
+    }
     if (pending.length) {
       const runs = (await gh(`${repo()}/actions/workflows/clip.yml/runs?per_page=30&event=workflow_dispatch`)).workflow_runs || [];
       let finished = false;
@@ -237,12 +253,16 @@ async function tick() {
         if (p.dead) { notePhoneError(p, 'GitHub never started this job. Check Actions are enabled for the repository.'); return false; }
         return true;
       });
-      if (pending.length < before) { toast('Your clips are ready 🎬'); drawJobs(); }
+      if (pending.length < before) {
+        const handed = index.some(j => LAPTOP.has(j.status) && !pending.some(p => p.job === j.job));
+        if (finishedJobs().length) drawJobs();
+        toast(handed && laptopJobs().length ? 'YouTube blocked the cloud — your laptop will make these clips 💻' : 'Your clips are ready 🎬', 4000);
+      }
       store.set('pending', pending); drawActive();
     }
   } catch (e) { console.warn(e); $('#cloudState').textContent = 'offline'; }
   finally { busy = false; }
-  schedule(pending.length ? (document.hidden ? 30000 : 5000) : 60000);
+  schedule(pending.length ? (document.hidden ? 30000 : 5000) : laptopJobs().length ? 15000 : 60000);
 }
 function notePhoneError(p, msg) {
   index.unshift({ job: p.job, title: p.url, created: p.created / 1000, clips: 0, error: msg, local: true });
@@ -271,13 +291,14 @@ async function getResult(job) {
 // clips tab -----------------------------------------------------------------------------------------------
 async function drawJobs() {
   const box = $('#jobs');
-  $('#jobsEmpty').classList.toggle('hidden', index.length > 0);
-  box.innerHTML = index.map(j => `<div class="job" data-job="${esc(j.job)}">
+  const list = finishedJobs();
+  $('#jobsEmpty').classList.toggle('hidden', list.length > 0);
+  box.innerHTML = list.map(j => `<div class="job" data-job="${esc(j.job)}">
       <h3>${esc(j.title || 'Untitled video')}</h3>
-      <div class="meta">${j.created ? ago(j.created * 1000) : ''}${j.error ? '' : ` · ${j.clips} clips`}</div>
+      <div class="meta">${j.created ? ago(j.created * 1000) : ''}${j.error ? '' : ` · ${j.clips} clips`}${j.by === 'laptop' ? ' · made on your laptop' : ''}</div>
       ${j.error ? `<div class="err">${esc(j.error)}</div>` : '<div class="thumbs"></div>'}
     </div>`).join('');
-  for (const j of index) {
+  for (const j of list) {
     if (j.error) continue;
     getResult(j.job).then(async res => {
       const el = box.querySelector(`.job[data-job="${j.job}"] .thumbs`);
@@ -415,7 +436,7 @@ async function checkStatus() {
 function showApp() {
   $('#connect').classList.add('hidden'); $('#app').classList.remove('hidden');
   drawOptions(); drawActive(); showTab('create');
-  loadIndex().catch(e => { $('#cloudState').textContent = 'offline'; toast(e.message, 4000); });
+  loadIndex().then(drawActive).catch(e => { $('#cloudState').textContent = 'offline'; toast(e.message, 4000); });
   tick();
 }
 function showConnect() { $('#app').classList.add('hidden'); $('#connect').classList.remove('hidden'); }

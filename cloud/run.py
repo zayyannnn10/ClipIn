@@ -1,21 +1,16 @@
 """ClipIn cloud worker: runs inside GitHub Actions, one step per stage, so the phone can show progress
 from the workflow's step list. Uses the same core code as the laptop app.
 
-  python -m cloud.run download | transcribe | highlights | render | publish | fail
+  python -m cloud.run check | download | transcribe | highlights | render | publish | fail
 
-Job settings come from JOB_ID and JOB_OPTIONS (JSON from the phone). Keys come from repo secrets
-(GEMINI_API_KEY, GROQ_API_KEY), never from the phone. Results are published to the `clips` branch:
-  index.json                     newest jobs first (what the phone lists)
-  jobs/<job>/result.json         clips, scores, AI titles and hashtags (or the error)
-  jobs/<job>/<clip>.mp4 / .jpg   the clips and thumbnails
+`check` asks YouTube about the video first (seconds). If YouTube blocks GitHub's servers, the job is handed
+to the laptop (status "laptop" in the clips branch) and the remaining steps are skipped.
+Keys come from repo secrets (GEMINI_API_KEY, GROQ_API_KEY), never from the phone.
 """
 import json
 import os
 import re
-import shutil
-import subprocess
 import sys
-import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -23,18 +18,31 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core import project  # noqa: E402
+from core import clipsbranch, project  # noqa: E402
 from core.log import log, setup  # noqa: E402
 
-KEEP_JOBS = 20                                   # older jobs are removed from the clips branch
 JOB = re.sub(r"[^A-Za-z0-9_-]", "", os.environ.get("JOB_ID", "local"))[:40] or "local"
 PDIR = ROOT / "projects" / JOB
 OPTS = {"length": "30-60", "count": 6, "format": "9:16", "layout": "auto", "caption_style": "Bold Pop",
         "hook_on": True, "zoom": False, "bar": False, "bar_color": "FFFFFF", "language": "auto", "focus": ""}
+CREATED = time.time()
 
 
 def say(msg):
     print(f"[ClipIn] {msg}", flush=True)
+
+
+def request():
+    return {**OPTS, **json.loads(os.environ.get("JOB_OPTIONS") or "{}")}
+
+
+def remote():
+    tok, repo = os.environ.get("GH_TOKEN", ""), os.environ.get("GITHUB_REPOSITORY", "")
+    if tok and repo:                                 # Actions' own short-lived token (masked in logs)
+        return f"https://x-access-token:{tok}@github.com/{repo}.git"
+    import subprocess
+    return subprocess.run(["git", "remote", "get-url", "origin"], cwd=ROOT, capture_output=True,
+                          text=True).stdout.strip()
 
 
 def load():
@@ -45,8 +53,15 @@ def save(p):
     project.save(PDIR, p)
 
 
+def output(name, value):
+    f = os.environ.get("GITHUB_OUTPUT")
+    if f:
+        with open(f, "a", encoding="utf-8") as fh:
+            fh.write(f"{name}={value}\n")
+
+
 def cookies():
-    """Optional YT_COOKIES secret (cookies.txt text) for when YouTube blocks GitHub's servers."""
+    """Optional YT_COOKIES secret (cookies.txt text)."""
     text = os.environ.get("YT_COOKIES", "").strip()
     if text:
         f = ROOT / "config" / "yt_cookies.txt"
@@ -58,12 +73,45 @@ def cookies():
 
 # stages --------------------------------------------------------------------------------------------
 
-def download():
-    from core import download as dl, media
-    opts = {**OPTS, **json.loads(os.environ.get("JOB_OPTIONS") or "{}")}
-    url = str(opts.pop("url", "")).strip()
+def check():
+    """Can GitHub's servers get this video? If YouTube blocks them, hand the job to the laptop."""
+    import yt_dlp
+    from core import download as dl
+    req = request()
+    url = str(req.get("url", "")).strip()
     if not dl.is_url(url):
         raise RuntimeError("That isn't a video link.")
+    cookies()
+    base = {"quiet": True, "no_warnings": True, "noplaylist": True, "logger": dl._Logger(),
+            "js_runtimes": {"deno": {"path": None}, "node": {"path": None}}}
+    blocked, title = False, ""
+    for extra in [{}] + [{"extractor_args": {"youtube": {"player_client": c}}} for c in dl.CLIENT_FALLBACKS[:2]]:
+        try:
+            with yt_dlp.YoutubeDL({**base, **extra}) as y:
+                info = y.extract_info(url, download=False)
+            title = info.get("title") or ""
+            blocked = False
+            break
+        except Exception as e:
+            msg = str(e)
+            if dl._needs_signin(msg) or "429" in msg:
+                blocked = True
+                continue
+            raise RuntimeError(f"Couldn't open the video: {msg.replace('ERROR: ', '')[:300]}") from None
+    if blocked:
+        say("YouTube blocks GitHub's servers for this video. Handing it to your laptop.")
+        clipsbranch.set_entry(remote(), JOB, say, request=req, title=title or url, status="laptop",
+                              stage="Waiting for your laptop", created=CREATED)
+        output("blocked", "true")
+    else:
+        say(f"Video OK: {title}")
+        output("blocked", "false")
+
+
+def download():
+    from core import download as dl, media
+    opts = request()
+    url = str(opts.pop("url", "")).strip()
     PDIR.mkdir(parents=True, exist_ok=True)
     cookies()
     say(f"Downloading {url}")
@@ -76,7 +124,7 @@ def download():
     path, info = dl.fetch(url, PDIR, prog)
     meta = media.probe(path)
     save({"id": JOB, "source": url, "title": info.get("title") or "", "channel": info.get("channel", ""),
-          "created": time.time(), "options": opts, "status": "running", "stage": "download", "error": "",
+          "created": CREATED, "options": opts, "status": "running", "stage": "download", "error": "",
           "source_file": str(path), "width": meta["width"], "height": meta["height"], "fps": meta["fps"],
           "has_audio": meta["has_audio"], "duration": info.get("duration") or meta["duration"], "clips": []})
     if not meta["has_audio"]:
@@ -130,88 +178,9 @@ def render():
         raise RuntimeError("No clip could be rendered.")
 
 
-# publishing to the clips branch -------------------------------------------------------------------
-
-def git(*args, cwd, check=True):
-    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
-    if check and r.returncode != 0:
-        raise RuntimeError(f"git {' '.join(args)}: {r.stderr.strip()[:300]}")
-    return r
-
-
-def _remote():
-    tok, repo = os.environ.get("GH_TOKEN", ""), os.environ.get("GITHUB_REPOSITORY", "")
-    if tok and repo:                                 # Actions' own short-lived token (masked in logs)
-        return f"https://x-access-token:{tok}@github.com/{repo}.git"
-    return git("remote", "get-url", "origin", cwd=ROOT).stdout.strip()
-
-
-def _publish(result, files):
-    """Add this job to the clips branch (one squashed commit, newest KEEP_JOBS jobs). Retries if another
-    job published at the same moment."""
-    remote = _remote()
-    for attempt in range(6):
-        with tempfile.TemporaryDirectory() as tmp:
-            w = Path(tmp)
-            git("init", "-q", cwd=w)
-            git("config", "user.name", "ClipIn cloud", cwd=w)
-            git("config", "user.email", "clipin@users.noreply.github.com", cwd=w)
-            git("remote", "add", "origin", remote, cwd=w)
-            have = git("fetch", "-q", "--depth", "1", "origin", "clips", cwd=w, check=False).returncode == 0
-            lease = ""
-            if have:
-                lease = git("rev-parse", "FETCH_HEAD", cwd=w).stdout.strip()
-                git("checkout", "-q", "FETCH_HEAD", "--", ".", cwd=w)
-            index = []
-            if (w / "index.json").exists():
-                index = json.loads((w / "index.json").read_text(encoding="utf-8"))
-            index = [j for j in index if j.get("job") != JOB]
-            index.insert(0, {"job": JOB, "title": result.get("title", ""), "created": result.get("created"),
-                             "clips": len([c for c in result.get("clips", []) if c.get("file")]),
-                             "error": result.get("error", ""),
-                             "thumb": next((c["thumb"] for c in result.get("clips", []) if c.get("thumb")), "")})
-            for old in index[KEEP_JOBS:]:
-                shutil.rmtree(w / "jobs" / old["job"], ignore_errors=True)
-            index = index[:KEEP_JOBS]
-            jd = w / "jobs" / JOB
-            jd.mkdir(parents=True, exist_ok=True)
-            for src, name in files:
-                shutil.copy2(src, jd / name)
-            (jd / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
-            (w / "index.json").write_text(json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
-            # an orphan commit every time keeps the branch small (old clips don't pile up in history)
-            git("checkout", "-q", "--orphan", "fresh", cwd=w)
-            git("add", "-A", cwd=w)
-            git("commit", "-q", "-m", f"clips for {JOB}", cwd=w)
-            push = ["push", "-q", "origin", "HEAD:refs/heads/clips"]
-            push.insert(2, f"--force-with-lease=clips:{lease}" if lease else "--force")
-            if git(*push, cwd=w, check=False).returncode == 0:
-                say(f"Published {len(files)} files to the clips branch")
-                return
-        say("Another job published at the same time, trying again...")
-        time.sleep(3 + attempt * 2)
-    raise RuntimeError("Couldn't publish the clips (too many jobs finishing at once).")
-
-
 def publish():
-    p = load()
-    files, clips = [], []
-    for c in p["clips"]:
-        item = {k: c.get(k) for k in ("id", "title", "hook", "reason", "score", "start", "end", "caption_style",
-                                      "status", "error", "yt")}
-        item["duration"] = round(float(c["end"]) - float(c["start"]), 1)
-        if c.get("status") == "done" and Path(c.get("file", "")).exists():
-            files.append((c["file"], f"{c['id']}.mp4"))
-            item["file"] = f"jobs/{JOB}/{c['id']}.mp4"
-            if c.get("thumb") and Path(c["thumb"]).exists():
-                files.append((c["thumb"], f"{c['id']}.jpg"))
-                item["thumb"] = f"jobs/{JOB}/{c['id']}.jpg"
-        clips.append(item)
-    clips.sort(key=lambda c: -int(c.get("score") or 0))
-    result = {"job": JOB, "title": p.get("title", ""), "channel": p.get("channel", ""), "source": p["source"],
-              "duration": p.get("duration"), "created": p.get("created"), "finished": time.time(),
-              "options": p.get("options", {}), "ai": p.get("ai_used", ""), "clips": clips, "error": ""}
-    _publish(result, files)
+    result, files = clipsbranch.build(JOB, load(), by="cloud")
+    clipsbranch.publish(remote(), JOB, result, files, say)
 
 
 def fail():
@@ -225,13 +194,13 @@ def fail():
         title = load().get("title", "")
     except Exception:
         pass
-    opts = json.loads(os.environ.get("JOB_OPTIONS") or "{}")
-    _publish({"job": JOB, "title": title or opts.get("url", ""), "source": opts.get("url", ""),
-              "created": time.time(), "finished": time.time(), "clips": [], "error": err}, [])
+    req = request()
+    clipsbranch.publish(remote(), JOB, {"job": JOB, "title": title or req.get("url", ""), "source": req.get("url", ""),
+                                        "created": CREATED, "finished": time.time(), "clips": [], "error": err}, [], say)
 
 
-STAGES = {"download": download, "transcribe": transcribe, "highlights": highlights, "render": render,
-          "publish": publish, "fail": fail}
+STAGES = {"check": check, "download": download, "transcribe": transcribe, "highlights": highlights,
+          "render": render, "publish": publish, "fail": fail}
 
 if __name__ == "__main__":
     setup("cloud", console=True)

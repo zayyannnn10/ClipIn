@@ -1,5 +1,6 @@
 # ClipIn cloud: the phone starts this with a link; it makes the clips and publishes them to the `clips` branch.
 # Each stage is its own step, so the phone can show live progress from the step list.
+# If YouTube blocks GitHub's servers, "Check video" hands the job to the laptop and the rest is skipped.
 name: clip
 run-name: "clip ${{ inputs.job }}"
 
@@ -34,12 +35,18 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check video
+        id: check
+        run: |
+          python -m pip install -q "yt-dlp[default]" requests
+          python -m cloud.run check
+
       - name: Install tools
+        if: steps.check.outputs.blocked != 'true'
         run: |
           echo ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true | sudo debconf-set-selections
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg ttf-mscorefonts-installer fonts-dejavu-core > /dev/null
-          python -m pip install -q --upgrade pip
           python -m pip install -q -r cloud/requirements.txt
           if [ -z "$GROQ_API_KEY" ]; then python -m pip install -q faster-whisper; fi
           mkdir -p models
@@ -47,14 +54,19 @@ jobs:
             https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
 
       - name: Download
+        if: steps.check.outputs.blocked != 'true'
         run: python -m cloud.run download
       - name: Transcribe
+        if: steps.check.outputs.blocked != 'true'
         run: python -m cloud.run transcribe
       - name: Find moments
+        if: steps.check.outputs.blocked != 'true'
         run: python -m cloud.run highlights
       - name: Render clips
+        if: steps.check.outputs.blocked != 'true'
         run: python -m cloud.run render
       - name: Publish
+        if: steps.check.outputs.blocked != 'true'
         run: python -m cloud.run publish
       - name: Report problem
         if: failure()
