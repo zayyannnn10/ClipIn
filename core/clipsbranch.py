@@ -7,6 +7,7 @@ Used by the GitHub cloud worker and by the laptop (when it makes clips for the p
                                laptop        YouTube blocked the cloud; waiting for the laptop
                                laptop-working  the laptop is making the clips ("stage" says what it's doing)
                                working       the cloud is making the clips
+                               cancelled     stopped from the phone (nothing more is written for it)
                              While a job is working, result.json already lists the picked moments and each clip
                              is added as soon as it's rendered, so the phone can show them one by one.
   jobs/<job>/request.json    the link and options the phone sent (for the laptop)
@@ -23,6 +24,10 @@ import time
 from pathlib import Path
 
 KEEP_JOBS = 20
+
+
+class Cancelled(Exception):
+    """The phone cancelled this job: stop making it."""
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
@@ -74,6 +79,8 @@ def set_entry(remote, job, say=print, request=None, **fields):
     """Create or update a job's line in index.json (and optionally store its request)."""
     def change(w, index):
         e = _entry(index, job)
+        if e and e.get("status") == "cancelled":
+            raise Cancelled(job)
         if not e:
             e = {"job": job, "created": time.time(), "clips": 0, "error": "", "thumb": ""}
             index.insert(0, e)
@@ -90,6 +97,9 @@ def publish(remote, job, result, files, say=print, status=None, stage=""):
     """Save a job's clips, thumbnails, result.json and index line. status=None means finished (done/error);
     pass "working"/"laptop-working" to publish clips while the rest are still being made."""
     def change(w, index):
+        e = _entry(index, job)
+        if e and e.get("status") == "cancelled":
+            raise Cancelled(job)
         d = w / "jobs" / job
         d.mkdir(parents=True, exist_ok=True)
         for src, name in files:

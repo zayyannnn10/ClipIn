@@ -1,7 +1,7 @@
 /* ClipIn phone app. Talks only to GitHub: starts a cloud run with the link, follows its steps for live
    progress, and shows the finished clips from the `clips` branch. No AI keys on the phone. */
 'use strict';
-const VERSION = '1.3.1';
+const VERSION = '1.4.0';
 const $ = s => document.querySelector(s);
 const store = {
   get(k, d) { try { const v = JSON.parse(localStorage.getItem('clipin.' + k)); return v ?? d; } catch { return d; } },
@@ -239,15 +239,15 @@ function drawActive() {
   const act = activeJobs();
   $('#activeWrap').classList.toggle('hidden', !pending.length && !act.length);
   $('#active').innerHTML = act.map(j => `<div class="job-live">
-      <div class="t">${esc(j.title || 'Video')}</div>
+      <div class="t">${esc(j.title || 'Video')}<button class="cancel" data-cancel="${esc(j.job)}">Cancel</button></div>
       <div class="bar ${j.total ? '' : 'indet'}"><i style="width:${j.total ? Math.round(100 * (j.clips || 0) / j.total) : 0}%"></i></div>
       <div class="s"><span>${esc(stageOf(j))}</span><span>${j.created ? ago(j.created * 1000) : ''}</span></div>
     </div>`).join('') + pending.map(p => `<div class="job-live">
-      <div class="t">${esc(p.title || p.url)}</div>
+      <div class="t">${esc(p.title || p.url)}<button class="cancel" data-cancel="${esc(p.job)}">Cancel</button></div>
       <div class="bar ${p.pct ? '' : 'indet'}"><i style="width:${Math.round((p.pct || 0) * 100)}%"></i></div>
       <div class="s"><span>${esc(p.stage || 'Starting')}</span><span>${p.pct ? Math.round(p.pct * 100) + '%' : ''} · ${ago(p.created)}</span></div>
     </div>`).join('');
-  $('#active').onclick = () => showTab('clips');
+  $('#active').onclick = e => { const c = e.target.closest('[data-cancel]'); if (c) cancelJob(c.dataset.cancel); else showTab('clips'); };
   const n = pending.length + act.length;
   const b = $('#badge'); b.textContent = n; b.classList.toggle('hidden', !n);
 }
@@ -295,6 +295,39 @@ async function tick() {
   const live = pending.length || activeJobs().length;
   schedule(live ? (document.hidden ? 30000 : 8000) : 60000);
 }
+const b64 = t => btoa(unescape(encodeURIComponent(t)));
+const unb64 = t => decodeURIComponent(escape(atob(t.replace(/\n/g, ''))));
+async function cancelJob(job) {
+  if (!confirm('Stop making clips from this video?')) return;
+  toast('Cancelling...');
+  try {
+    // 1) stop the cloud computer if it's still running this job
+    const runs = (await gh(`${repo()}/actions/workflows/clip.yml/runs?per_page=30`)).workflow_runs || [];
+    const run = runs.find(r => r.display_title === 'clip ' + job && r.status !== 'completed');
+    if (run) await gh(`${repo()}/actions/runs/${run.id}/cancel`, { method: 'POST' }).catch(() => { });
+    // 2) mark it cancelled, so the laptop (or the cloud) stops and nothing more is saved for it
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const f = await gh(`${repo()}/contents/index.json?ref=clips`).catch(() => null);
+      if (!f) break;                              // no clips branch yet: the job only existed on this phone
+      const list = JSON.parse(unb64(f.content));
+      const e = list.find(x => x.job === job);
+      if (!e) break;
+      e.status = 'cancelled'; e.stage = ''; e.error = '';
+      try {
+        await gh(`${repo()}/contents/index.json`, { method: 'PUT', body: { message: `cancel ${job}`, branch: 'clips',
+          sha: f.sha, content: b64(JSON.stringify(list, null, 1)) } });
+        break;
+      } catch (err) { if (attempt === 3) throw err; await new Promise(r => setTimeout(r, 1500)); }
+    }
+    pending = pending.filter(p => p.job !== job); store.set('pending', pending);
+    const local = index.find(x => x.job === job);
+    if (local) local.status = 'cancelled';
+    else index.unshift({ job, title: 'Cancelled video', created: Date.now() / 1000, clips: 0, status: 'cancelled', local: true });
+    store.set('index', index);
+    drawActive(); drawJobs(); toast('Cancelled');
+  } catch (e) { toast("Couldn't cancel: " + e.message, 4000); }
+}
+
 function notePhoneError(p, msg) {
   index.unshift({ job: p.job, title: p.url, created: p.created / 1000, clips: 0, error: msg, local: true, status: 'error' });
   store.set('index', index);
@@ -334,16 +367,17 @@ async function drawJobs() {
     box.dataset.sig = sig;
     box.innerHTML = list.map(j => {
       const working = j.status === 'starting' || ACTIVE.has(j.status);
-      const meta = working ? `<span class="live-dot"></span>${esc(stageOf(j))}`
+      const meta = working ? `<span class="live-dot"></span>${esc(stageOf(j))}<button class="cancel" data-cancel="${esc(j.job)}">Cancel</button>`
         : `${j.created ? ago(j.created * 1000) : ''}${j.error ? '' : ` · ${j.clips} clips`}${j.by === 'laptop' ? ' · made on your laptop' : ''}`;
       return `<div class="job" data-job="${esc(j.job)}">
         <h3>${esc(j.title || 'Untitled video')}</h3><div class="meta">${meta}</div>
-        ${j.error ? `<div class="err">${esc(j.error)}</div>` : `<div class="thumbs">${working ? skeletons(3) : ''}</div>`}
+        ${j.status === 'cancelled' ? '<div class="err muted-err">Cancelled</div>' : j.error ? `<div class="err">${esc(j.error)}</div>` : `<div class="thumbs">${working ? skeletons(3) : ''}</div>`}
       </div>`;
     }).join('');
   }
+  box.onclick = e => { const c = e.target.closest('[data-cancel]'); if (c) cancelJob(c.dataset.cancel); };
   for (const j of list) {
-    if (j.error || j.status === 'starting') continue;
+    if (j.error || j.status === 'starting' || j.status === 'cancelled') continue;
     const working = ACTIVE.has(j.status);
     if (working && !j.total) continue;            // moments not picked yet
     getResult(j.job, working).then(res => fillThumbs(box, j, res, working)).catch(() => { });

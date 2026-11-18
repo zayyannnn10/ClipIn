@@ -203,3 +203,10 @@ details.more summary::after { content: " ▾"; }
 .lp-seam { position: absolute; left: 0; right: 0; top: calc(50% - 1px); height: 2px; background: rgba(0,0,0,0.85); }
 .lp-follow { position: absolute; left: 22%; right: 22%; top: 30%; bottom: 38%; border: 2px solid rgba(255,255,255,0.85);
   border-radius: 6px; clip-path: polygon(0 0,22% 0,22% 3px,78% 3px,78% 0,100% 0,100% 22%,calc(100% - 3px) 22%,calc(100% - 3px) 78%,100% 78%,100% 100%,78% 100%,78% calc(100% - 3px),22% calc(100% - 3px),22% 100%,0 100%,0 78%,3px 78%,3px 22%,0 22%); }
+
+.cancel { float: right; background: transparent; border: 1px solid #3a3a44; color: var(--muted); border-radius: 999px;
+  padding: 3px 10px; font: 600 12px inherit; font-family: inherit; margin-left: 8px; }
+.cancel:active { color: var(--bad); border-color: var(--bad); }
+.job-live .t { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.job-live .t .cancel { float: none; flex: none; }
+.err.muted-err { color: var(--muted); background: rgba(255,255,255,0.04); }

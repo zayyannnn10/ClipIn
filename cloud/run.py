@@ -165,6 +165,8 @@ def partial(p, stage):
     try:
         result, files = clipsbranch.build(JOB, p, by="cloud")
         clipsbranch.publish(remote(), JOB, result, files, say, status="working", stage=stage)
+    except clipsbranch.Cancelled:
+        raise
     except Exception as e:
         say(f"(couldn't update the phone yet: {e})")
 
