@@ -30,7 +30,7 @@ class _Logger:
 # 1080p H.264 decodes fastest and merges cleanly into MP4; 1440p gives sharper vertical crops but is huge
 # for long videos (70 minutes = 3.4 GB), so it's only used up to LONG_VIDEO seconds
 FMT_1080 = "bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b"
-FMT_1440 = "bv*[height<=1440][height>1080]+ba/" + FMT_1080
+FMT_1440 = "bv*[height<=1440][height>1080][vcodec!^=av01]+ba/" + FMT_1080   # AV1 decodes far slower
 LONG_VIDEO = 20 * 60
 
 CLIENT_FALLBACKS = [["tv_simply"], ["web_safari"], ["mweb"], ["tv"], ["android_vr"], ["web_embedded"]]
@@ -76,7 +76,7 @@ def _cookie_error(msg):
     return f"Couldn't download the video: {msg[:300]}"
 
 
-def fetch(url, outdir: Path, on_progress, section=None, name="source"):
+def fetch(url, outdir: Path, on_progress, section=None, name="source", audio=False):
     """Returns (path, info). on_progress(fraction, message).
     section=(start, end) downloads only that part of the video (used to re-render a clip)."""
     from core.deps import require
@@ -118,7 +118,9 @@ def fetch(url, outdir: Path, on_progress, section=None, name="source"):
         # no re-encode: MP4 edit lists make playback start at the asked time, and it takes seconds, not minutes
     # The YouTube login is only a backup: sending it with every download makes YouTube answer
     # "The page needs to be reloaded" for many videos. It's used below only when YouTube asks to sign in.
-    if not section:
+    if audio:
+        opts["format"] = "ba[ext=m4a]/ba/b"           # sound only: ~1 MB a minute
+    elif not section:
         try:                                   # a quick look first: long videos get the smaller 1080p file
             with yt_dlp.YoutubeDL({**opts, "skip_download": True, "progress_hooks": []}) as y:
                 pre = y.extract_info(url, download=False)
@@ -127,7 +129,7 @@ def fetch(url, outdir: Path, on_progress, section=None, name="source"):
         except Exception:
             pass                               # the real download below reports any problem
     else:
-        opts["format"] = FMT_1080
+        opts["format"] = FMT_1440                     # a short piece: the sharpest version is still small
     info, msg = None, ""
     try:
         info = _run(yt_dlp, opts, url)
@@ -157,7 +159,8 @@ def fetch(url, outdir: Path, on_progress, section=None, name="source"):
             info = _run(yt_dlp, {**opts, **extra}, url)
         except Exception as e2:
             raise RuntimeError(_cookie_error(str(e2).replace("ERROR: ", ""))) from None
-    vids = sorted((p for p in outdir.glob(f"{name}.*") if p.suffix.lower() in VIDEO_EXT),
+    exts = VIDEO_EXT + ((".m4a", ".mp3", ".opus", ".ogg", ".aac") if audio else ())
+    vids = sorted((p for p in outdir.glob(f"{name}.*") if p.suffix.lower() in exts),
                   key=lambda p: p.stat().st_size, reverse=True)
     if not vids:
         raise RuntimeError("The download finished but no video file was found.")
@@ -167,3 +170,9 @@ def fetch(url, outdir: Path, on_progress, section=None, name="source"):
         "channel": info.get("uploader") or info.get("channel") or "",
         "heatmap": info.get("heatmap") or [],
     }
+
+
+def fetch_audio(url, outdir: Path, on_progress):
+    """Only the sound of a video (for transcribing when it has no subtitles)."""
+    path, _ = fetch(url, outdir, on_progress, name="audio", audio=True)
+    return path

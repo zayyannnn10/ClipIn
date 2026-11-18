@@ -111,33 +111,31 @@ def check():
 
 
 def download():
-    from core import download as dl, media
+    """Smart mode: read the video (title, subtitles or audio only) - the full video is never downloaded."""
+    from core import smart
     opts = request()
     url = str(opts.pop("url", "")).strip()
     PDIR.mkdir(parents=True, exist_ok=True)
     cookies()
-    say(f"Downloading {url}")
     last = [0.0]
 
     def prog(f, m=""):
-        if time.time() - last[0] > 5:
+        if m and time.time() - last[0] > 4:
             last[0] = time.time()
-            say(m or f"{f * 100:.0f}%")
-    path, info = dl.fetch(url, PDIR, prog)
-    meta = media.probe(path)
-    save({"id": JOB, "source": url, "title": info.get("title") or "", "channel": info.get("channel", ""),
-          "created": CREATED, "options": opts, "status": "running", "stage": "download", "error": "",
-          "source_file": str(path), "width": meta["width"], "height": meta["height"], "fps": meta["fps"],
-          "has_audio": meta["has_audio"], "duration": info.get("duration") or meta["duration"], "clips": [],
-          "heatmap": info.get("heatmap") or []})
-    if not meta["has_audio"]:
-        raise RuntimeError("This video has no sound, so there's nothing to transcribe.")
-    say(f"Video ready: {info.get('title')} ({project.fmt_time(meta['duration'])})")
+            say(m)
+    meta, tr = smart.prepare(url, PDIR, opts.get("language", "auto"), prog)
+    save({"id": JOB, "source": url, "created": CREATED, "options": opts, "status": "running", "stage": "download",
+          "error": "", "source_file": "", "smart": True, "clips": [], **meta})
+    say(f"Read: {meta['title']} ({project.fmt_time(meta['duration'])}, {len(tr.get('words', []))} words, "
+        f"{tr.get('engine')})")
 
 
 def transcribe():
     from core import transcribe as tr
     p = load()
+    if (PDIR / "transcript.json").exists():
+        say("Transcript already made while reading the video")
+        return
     tr.transcribe(p["source_file"], PDIR, p["duration"], p["options"].get("language", "auto"),
                   lambda f, m="": say(m) if m else None)
     t = json.loads((PDIR / "transcript.json").read_text(encoding="utf-8"))
@@ -175,10 +173,18 @@ def render():
     from core import metadata, render as rd
     p = load()
     t = json.loads((PDIR / "transcript.json").read_text(encoding="utf-8"))
+    pool, pieces = (None, {})
+    if p.get("smart"):
+        from core import smart
+        pool, pieces = smart.prefetch(PDIR, p, p["clips"])      # every moment downloads in the background
     for i, c in enumerate(p["clips"], 1):
         say(f"Clip {i} of {len(p['clips'])}: {c['title']}")
         try:
-            rd.render_clip(PDIR, p, c, t, lambda f, m="": None)
+            if p.get("smart"):
+                from core import smart
+                smart.render_clip(PDIR, p, c, t, lambda f, m="": None, piece=pieces[c["id"]].result())
+            else:
+                rd.render_clip(PDIR, p, c, t, lambda f, m="": None)
         except Exception as e:
             log.error("clip %s failed: %s", c["id"], traceback.format_exc())
             c.update(status="error", error=str(e)[:300])
