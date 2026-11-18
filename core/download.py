@@ -92,9 +92,10 @@ def fetch(url, outdir: Path, on_progress, section=None, name="source"):
         # YouTube's player check needs a JavaScript runtime; Node.js or Deno is used if installed
         "js_runtimes": {"deno": {"path": None}, "node": {"path": None}},
         "outtmpl": str(outdir / f"{name}.%(ext)s"),
-        # H.264 first: it decodes fastest and merges cleanly into MP4
-        "format": ("bv*[height<=1440][height>1080]+ba/bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/"
-                   "bv*[height<=1440]+ba/b[height<=1440]/b"),
+        # 1440p when the file stays under ~1.2 GB (sharper vertical crops); otherwise 1080p H.264, which
+        # decodes fastest and merges cleanly into MP4 (a 70-minute video at 1440p is 3.4 GB)
+        "format": ("bv*[height<=1440][height>1080][filesize<?1200M][filesize_approx<?1200M]+ba/"
+                   "bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1440]/b"),
         "merge_output_format": "mp4",
         "ffmpeg_location": media.ffmpeg(),
         "noplaylist": True,
