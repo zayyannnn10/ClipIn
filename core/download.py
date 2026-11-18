@@ -27,6 +27,12 @@ class _Logger:
         log.error("yt-dlp: %s", msg)
 
 
+# 1080p H.264 decodes fastest and merges cleanly into MP4; 1440p gives sharper vertical crops but is huge
+# for long videos (70 minutes = 3.4 GB), so it's only used up to LONG_VIDEO seconds
+FMT_1080 = "bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b"
+FMT_1440 = "bv*[height<=1440][height>1080]+ba/" + FMT_1080
+LONG_VIDEO = 20 * 60
+
 CLIENT_FALLBACKS = [["tv_simply"], ["web_safari"], ["mweb"], ["tv"], ["android_vr"], ["web_embedded"]]
 
 
@@ -92,10 +98,7 @@ def fetch(url, outdir: Path, on_progress, section=None, name="source"):
         # YouTube's player check needs a JavaScript runtime; Node.js or Deno is used if installed
         "js_runtimes": {"deno": {"path": None}, "node": {"path": None}},
         "outtmpl": str(outdir / f"{name}.%(ext)s"),
-        # 1440p when the file stays under ~1.2 GB (sharper vertical crops); otherwise 1080p H.264, which
-        # decodes fastest and merges cleanly into MP4 (a 70-minute video at 1440p is 3.4 GB)
-        "format": ("bv*[height<=1440][height>1080][filesize<?1200M][filesize_approx<?1200M]+ba/"
-                   "bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1440]/b"),
+        "format": FMT_1440,                    # long videos switch to FMT_1080 below
         "merge_output_format": "mp4",
         "ffmpeg_location": media.ffmpeg(),
         "noplaylist": True,
@@ -114,6 +117,16 @@ def fetch(url, outdir: Path, on_progress, section=None, name="source"):
         # no re-encode: MP4 edit lists make playback start at the asked time, and it takes seconds, not minutes
     # The YouTube login is only a backup: sending it with every download makes YouTube answer
     # "The page needs to be reloaded" for many videos. It's used below only when YouTube asks to sign in.
+    if not section:
+        try:                                   # a quick look first: long videos get the smaller 1080p file
+            with yt_dlp.YoutubeDL({**opts, "skip_download": True, "progress_hooks": []}) as y:
+                pre = y.extract_info(url, download=False)
+            if (pre.get("duration") or 0) > LONG_VIDEO:
+                opts["format"] = FMT_1080
+        except Exception:
+            pass                               # the real download below reports any problem
+    else:
+        opts["format"] = FMT_1080
     info, msg = None, ""
     try:
         info = _run(yt_dlp, opts, url)
