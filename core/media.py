@@ -85,6 +85,6 @@ def nvenc_ok():
 
 def video_codec_args(pref="auto"):
     if pref in ("auto", "nvenc") and nvenc_ok():
-        return ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "21", "-b:v", "0",
-                "-maxrate", "14M", "-bufsize", "28M"]
-    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+        return ["-c:v", "h264_nvenc", "-preset", "p6", "-tune", "hq", "-rc", "vbr", "-cq", "19", "-b:v", "0",
+                "-maxrate", "20M", "-bufsize", "40M", "-profile:v", "high"]
+    return ["-c:v", "libx264", "-preset", "fast", "-crf", "19", "-profile:v", "high"]

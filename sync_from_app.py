@@ -15,6 +15,9 @@ def main():
     for f in sorted((APP / "core").glob("*.py")):
         if f.name not in SKIP:
             shutil.copy2(f, dst / f.name)
+    fonts = HERE / "fonts"                       # caption fonts, so cloud clips look like laptop clips
+    shutil.rmtree(fonts, ignore_errors=True)
+    shutil.copytree(APP / "fonts", fonts)
     caps = HERE / "docs" / "captions"
     caps.mkdir(parents=True, exist_ok=True)
     for f in (APP / "app" / "assets" / "captions").glob("*.png"):

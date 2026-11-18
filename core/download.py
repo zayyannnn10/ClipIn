@@ -93,7 +93,8 @@ def fetch(url, outdir: Path, on_progress, section=None, name="source"):
         "js_runtimes": {"deno": {"path": None}, "node": {"path": None}},
         "outtmpl": str(outdir / f"{name}.%(ext)s"),
         # H.264 first: it decodes fastest and merges cleanly into MP4
-        "format": "bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b",
+        "format": ("bv*[height<=1440][height>1080]+ba/bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/"
+                   "bv*[height<=1440]+ba/b[height<=1440]/b"),
         "merge_output_format": "mp4",
         "ffmpeg_location": media.ffmpeg(),
         "noplaylist": True,

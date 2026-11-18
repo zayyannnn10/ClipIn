@@ -184,3 +184,22 @@ details.more summary::after { content: " ▾"; }
 .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--lime); margin-right: 6px;
   box-shadow: 0 0 8px var(--lime); animation: pulse 1.2s infinite; vertical-align: 1px; }
 @keyframes pulse { 50% { opacity: 0.35; } }
+
+/* layout picker */
+.lcard { flex: 0 0 104px; scroll-snap-align: start; text-align: left; }
+.lcard .lp { width: 104px; aspect-ratio: 9/16; border-radius: 14px; overflow: hidden; position: relative; background: #111;
+  border: 2px solid transparent; }
+.lcard.on .lp { border-color: #fff; }
+.lcard b { display: block; font-size: 12.5px; margin: 7px 2px 1px; }
+.lcard span { display: block; font-size: 10.5px; color: var(--muted); margin: 0 2px; line-height: 1.25; }
+.lp > div, .lp-half > div { position: absolute; background-repeat: no-repeat; }
+.lp-cover { inset: 0; background-size: cover; background-position: center; }
+.lp-blur { inset: -12px; background-size: cover; background-position: center; filter: blur(9px) brightness(0.7); }
+.lp-fit { left: 0; right: 0; top: 50%; transform: translateY(-50%); aspect-ratio: 16/9; background-size: cover;
+  background-position: center; }
+.lp-fit.big { left: -18%; right: -18%; }
+.lp-half { left: 0; right: 0; top: 0; height: 50%; background-size: cover; background-position: center; overflow: hidden; }
+.lp-half.bot { top: 50%; }
+.lp-seam { position: absolute; left: 0; right: 0; top: calc(50% - 1px); height: 2px; background: rgba(0,0,0,0.85); }
+.lp-follow { position: absolute; left: 22%; right: 22%; top: 30%; bottom: 38%; border: 2px solid rgba(255,255,255,0.85);
+  border-radius: 6px; clip-path: polygon(0 0,22% 0,22% 3px,78% 3px,78% 0,100% 0,100% 22%,calc(100% - 3px) 22%,calc(100% - 3px) 78%,100% 78%,100% 100%,78% 100%,78% calc(100% - 3px),22% calc(100% - 3px),22% 100%,0 100%,0 78%,3px 78%,3px 22%,0 22%); }

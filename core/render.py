@@ -1,5 +1,15 @@
-"""Render one clip: cut, frame (follow face / fit on blur or black / centre), optional zoom cuts and progress
-bar, burn captions, even out the loudness, encode on the GPU (NVENC) when possible."""
+"""Render one clip: cut, frame it, optional zoom and progress bar, burn captions, even out the loudness,
+encode on the GPU (NVENC) when possible.
+
+Layouts (9:16 unless noted):
+  auto        follow the speaker (smooth camera)
+  fit         full frame on a blurred copy of itself
+  fit_big     bigger frame (sides trimmed) on blur
+  fit_black   full frame on black
+  center      centre crop
+  split_two   two speakers: left person on top, right person below
+  split_wide  speaker on top, the full shot below
+"""
 import os
 import time
 from pathlib import Path
@@ -9,6 +19,7 @@ from core.config import cfg
 
 SIZES = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080)}
 ASPECTS = {"9:16": (9, 16), "1:1": (1, 1), "16:9": (16, 9)}
+LAYOUTS = ["auto", "fit", "fit_big", "fit_black", "center", "split_two", "split_wide"]
 
 
 def _opt(clip, opts, name, default):
@@ -16,7 +27,33 @@ def _opt(clip, opts, name, default):
     return opts.get(name, default) if v is None else v
 
 
+def _sharp(src_px, out_px):
+    """A light sharpen when the picture is enlarged a lot, so zoomed crops don't look soft."""
+    return ",unsharp=5:5:0.55:3:3:0.0" if out_px > src_px * 1.15 else ""
+
+
+def _blur_bg(label_in, W, H, out):
+    bw, bh = W // 4 // 2 * 2, H // 4 // 2 * 2
+    return (f"[{label_in}]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},boxblur=14:2,"
+            f"eq=brightness=-0.1:saturation=1.15,scale={W}:{H}[{out}]")
+
+
+def _fit_on_blur(src_label, W, H, out, big=False):
+    """Whole picture on a blurred, darkened copy of itself. big=True makes it larger (sides trimmed)."""
+    fg = (f"scale={int(W * 1.35) // 2 * 2}:-2:flags=lanczos,crop='min(iw,{W})':ih" if big else
+          f"scale={W}:{H}:force_original_aspect_ratio=decrease:flags=lanczos")
+    return (f"[{src_label}]split=2[{out}_a][{out}_b];" + _blur_bg(f"{out}_a", W, H, f"{out}_bg") + ";"
+            f"[{out}_b]{fg}[{out}_fg];[{out}_bg][{out}_fg]overlay=(W-w)/2:(H-h)/2[{out}]")
+
+
+def _follow(cdir, name, target, centers, fps, cw, ch, sw, sh, W, H, zoom=None, y_center=None, src_label="0:v"):
+    x, y, w, h = reframe.write_cmds(cdir / name, target, centers, fps, cw, ch, sw, sh, zoom, y_center)
+    return (f"[{src_label}]sendcmd=f={name},{target}={w}:{h}:{x}:{y},"
+            f"scale={W}:{H}:flags=lanczos{_sharp(ch, H)},setsar=1")
+
+
 def render_clip(pdir: Path, proj, clip, transcript, on_progress):
+    import numpy as np
     src = proj["source_file"]
     opts = proj["options"]
     fmt = opts.get("format", "9:16")
@@ -27,65 +64,88 @@ def render_clip(pdir: Path, proj, clip, transcript, on_progress):
     dur = end - start
     cdir = pdir / "clips" / clip["id"]
     cdir.mkdir(parents=True, exist_ok=True)
+    for old in cdir.glob("cmds*.txt"):
+        old.unlink()
     layout = clip.get("layout") or opts.get("layout", "auto")
     zoom_on = bool(_opt(clip, opts, "zoom", False))
     bar_on = bool(_opt(clip, opts, "bar", False))
     bar_color = _opt(clip, opts, "bar_color", "FFFFFF")
     words = transcript.get("words") or []
 
-    # captions + hook text
-    ass = cdir / "captions.ass"
-    has_ass = captions.build(words, start, end, W, H, clip.get("caption_style") or "Bold Pop", clip.get("hook", ""),
-                             clip.get("hook_on", True), ass)
-    if not has_ass and ass.exists():
-        ass.unlink()
-
-    # framing
     cw = reframe.crop_width(sw, sh, ASPECTS.get(fmt, (9, 16)))
-    if cw >= sw - 2 and layout in ("auto", "center"):
-        layout = "fit"                         # the source is already as narrow as the target
-    zooms = reframe.zoom_points(words, start, end) if zoom_on else None
+    if layout.startswith("split") and fmt != "9:16":
+        layout = "fit"                                 # two stacked frames only make sense when tall
+    if cw >= sw - 2 and layout in ("auto", "center", "split_two", "split_wide"):
+        layout = "fit"                                 # the source is already as narrow as the target
+    n = int(dur * fps) + 1
+    zoom = reframe.zoom_curve(reframe.zoom_points(words, start, end), fps, dur) if zoom_on else None
+    find = lambda: reframe.detect(src, start, end, sw, sh, lambda f: on_progress(f * 0.3, "Finding the speakers..."))  # noqa: E731
+
     chain = None
     if layout == "auto":
         on_progress(0.0, "Finding the speaker...")
-        keys = reframe.track(src, start, end, sw, sh, cw, lambda f: on_progress(f * 0.3, "Finding the speaker..."))
-        if keys:
-            x0 = reframe.write_cmds(keys, fps, dur, cdir / "cmds.txt", cw, sh, sw, zooms)
-            chain = f"[0:v]sendcmd=f=cmds.txt,crop={cw}:{sh}:{x0}:0,scale={W}:{H}:flags=lanczos,setsar=1"
-    if chain is None and layout in ("fit", "fit_black"):
-        if layout == "fit_black":
-            chain = (f"[0:v]scale={W}:{H}:force_original_aspect_ratio=decrease:flags=lanczos,"
-                     f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,setsar=1")
+        samples = find()
+        if samples:
+            centers = reframe.follow_one(samples, sw, cw, fps, dur)
+            chain = _follow(cdir, "cmds.txt", "crop@a", centers, fps, cw, sh, sw, sh, W, H, zoom) + "[v0]"
         else:
-            bw, bh = W // 4 // 2 * 2, H // 4 // 2 * 2
-            chain = (f"[0:v]split=2[a][b];"
-                     f"[a]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},boxblur=12:2,"
-                     f"eq=brightness=-0.08,scale={W}:{H}[bg];"
-                     f"[b]scale={W}:{H}:force_original_aspect_ratio=decrease:flags=lanczos[fg];"
-                     f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1")
+            layout = "center"
+    if layout in ("split_two", "split_wide"):
+        H2 = H // 2
+        ch = int(sh * 0.92) // 2 * 2
+        cw2 = int(ch * W / H2) // 2 * 2
+        if cw2 > sw:
+            cw2 = sw // 2 * 2
+            ch = int(cw2 * H2 / W) // 2 * 2
+        samples = find()
+        two = reframe.follow_two(samples, sw, cw2, fps, dur) if (samples and layout == "split_two") else None
+        if layout == "split_two" and not two:
+            layout = "split_wide"                      # only one person on screen
+        if layout == "split_two":
+            pl, pr, ly, ry = two
+            top = _follow(cdir, "cmds_a.txt", "crop@a", pl, fps, cw2, ch, sw, sh, W, H2, zoom, ly, "s1")
+            bot = _follow(cdir, "cmds_b.txt", "crop@b", pr, fps, cw2, ch, sw, sh, W, H2, zoom, ry, "s2")
+            chain = f"[0:v]split=2[s1][s2];{top}[t];{bot}[b];[t][b]vstack=2[v0]"
+        else:
+            centers = (reframe.follow_one(samples, sw, cw2, fps, dur) if samples else np.full(n, sw / 2.0))
+            top = _follow(cdir, "cmds_a.txt", "crop@a", centers, fps, cw2, ch, sw, sh, W, H2, zoom, None, "s1")
+            chain = (f"[0:v]split=2[s1][s2];{top}[t];" + _fit_on_blur("s2", W, H2, "b") +
+                     ";[t][b]vstack=2[v0]")
+        chain = chain.replace("[v0]", f",drawbox=x=0:y={H2 - 3}:w={W}:h=6:color=black@0.85:t=fill[v0]") \
+            if chain.endswith("vstack=2[v0]") else chain
+    if chain is None and layout in ("fit", "fit_big"):
+        chain = _fit_on_blur("0:v", W, H, "v0", big=layout == "fit_big")
+    if chain is None and layout == "fit_black":
+        chain = (f"[0:v]scale={W}:{H}:force_original_aspect_ratio=decrease:flags=lanczos,"
+                 f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,setsar=1[v0]")
     if chain is None:
         layout = "center"
-        x0 = (sw - cw) // 2
-        if zooms and len(zooms) > 1:
-            reframe.write_cmds([(0.0, float(x0))], fps, dur, cdir / "cmds.txt", cw, sh, sw, zooms)
-            chain = f"[0:v]sendcmd=f=cmds.txt,crop={cw}:{sh}:{x0}:0,scale={W}:{H}:flags=lanczos,setsar=1"
-        else:
-            chain = f"[0:v]crop={cw}:{sh}:{x0}:0,scale={W}:{H}:flags=lanczos,setsar=1"
+        centers = np.full(n, sw / 2.0)
+        chain = _follow(cdir, "cmds.txt", "crop@a", centers, fps, cw, sh, sw, sh, W, H, zoom) + "[v0]"
+
+    # captions + hook text (over the seam for split screens)
+    ass = cdir / "captions.ass"
+    has_ass = captions.build(words, start, end, W, H, clip.get("caption_style") or "Bold Pop", clip.get("hook", ""),
+                             clip.get("hook_on", True), ass, pos="mid" if layout.startswith("split") else None)
+    if not has_ass and ass.exists():
+        ass.unlink()
+    post = "[v0]setsar=1"
     if has_ass:
-        chain += ",ass=captions.ass"
+        rel = os.path.relpath(captions.FONTS, cdir).replace("\\", "/")
+        post += f",ass=captions.ass:fontsdir='{rel}'"
     inputs = ["-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", src]
     if bar_on:
         bh_ = max(8, H // 160)
         inputs += ["-f", "lavfi", "-i", f"color=c=0x{bar_color}:s={W}x{bh_}:r={fps:.3f}"]
-        chain += (f"[base];[base][1:v]overlay=x='-w+w*t/{dur:.3f}':y=H-h:eval=frame:shortest=1")
-    graph = chain + ",format=yuv420p[v]"
+        post += f"[base];[base][1:v]overlay=x='-w+w*t/{dur:.3f}':y=H-h:eval=frame:shortest=1"
+    graph = chain + ";" + post + ",format=yuv420p[v]"
     maps = ["-map", "[v]"]
     if proj.get("has_audio", True):
         graph += ";[0:a:0]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]"
-        maps += ["-map", "[a]", "-c:a", "aac", "-b:a", "160k"]
+        maps += ["-map", "[a]", "-c:a", "aac", "-b:a", "192k"]
 
     tmp = cdir / "clip.tmp.mp4"
-    base = 0.3 if layout == "auto" else 0.0
+    base = 0.3 if layout in ("auto", "split_two", "split_wide") else 0.0
     media.run([*inputs, "-filter_complex", graph, *maps, "-t", f"{dur:.3f}",
                *media.video_codec_args(cfg.get("render.encoder", "auto")), "-r", f"{fps:.3f}",
                "-movflags", "+faststart", tmp.name],

@@ -1,7 +1,7 @@
 /* ClipIn phone app. Talks only to GitHub: starts a cloud run with the link, follows its steps for live
    progress, and shows the finished clips from the `clips` branch. No AI keys on the phone. */
 'use strict';
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const $ = s => document.querySelector(s);
 const store = {
   get(k, d) { try { const v = JSON.parse(localStorage.getItem('clipin.' + k)); return v ?? d; } catch { return d; } },
@@ -18,6 +18,8 @@ const TEMPLATES = [
   { id: 'neon', name: 'Neon Night', desc: 'Glowing green words, green bar', caption_style: 'Neon', zoom: true, bar: true, bar_color: '39FF88' },
   { id: 'fun', name: 'Fun', desc: 'Colourful playful words', caption_style: 'Rainbow', zoom: true },
   { id: 'aesthetic', name: 'Aesthetic', desc: 'Soft pink lowercase', caption_style: 'Pastel', bar: true, bar_color: 'F9A8D4' },
+  { id: 'duo', name: 'Podcast Duo', desc: 'Split screen: one person per half', layout: 'split_two', caption_style: 'Bold Pop', bar: true },
+  { id: 'reaction', name: 'Face + Scene', desc: 'Speaker on top, full shot below', layout: 'split_wide', caption_style: 'Two Tone' },
   { id: 'cinematic', name: 'Cinematic', desc: 'Full shot on blur, small subtitles', layout: 'fit', caption_style: 'Subtitle', hook_on: false },
   { id: 'square', name: 'Square Feed', desc: '1:1 on black, boxed captions', format: '1:1', layout: 'fit_black', caption_style: 'Boxed' },
   { id: 'wide', name: 'YouTube Wide', desc: '16:9 for normal videos', format: '16:9', layout: 'fit_black', caption_style: 'Clean', hook_on: false },
@@ -28,7 +30,13 @@ const CAPTIONS = ['Bold Pop', 'Two Tone', 'One Word', 'Neon', 'Fire', 'Ice', 'Ra
 const LENGTHS = [['15-30', '15–30 s'], ['30-60', '30–60 s'], ['60-90', '60–90 s']];
 const COUNTS = [[3, '3 clips'], [6, '6 clips'], [9, '9 clips'], [12, '12 clips']];
 const FORMATS = [['9:16', '9:16'], ['1:1', '1:1'], ['16:9', '16:9']];
-const LAYOUTS = [['auto', 'Follow'], ['fit', 'Blur'], ['fit_black', 'Black'], ['center', 'Center']];
+const LAYOUTS = [['auto', 'Follow'], ['fit', 'Blur'], ['fit_big', 'Big'], ['split_two', 'Split'],
+  ['split_wide', 'Face+shot'], ['fit_black', 'Black'], ['center', 'Center']];
+const LAYOUT_CARDS = [  // what each layout does, for the visual picker
+  ['auto', 'Follow speaker', 'Camera follows who talks'], ['fit', 'Full + blur', 'Whole video, blurred fill'],
+  ['fit_big', 'Big + blur', 'Bigger video, blurred fill'], ['split_two', 'Split: 2 people', 'One person per half'],
+  ['split_wide', 'Face + scene', 'Speaker top, scene below'], ['fit_black', 'Full + black', 'Whole video, black bars'],
+  ['center', 'Center', 'Middle of the frame']];
 const LANGS = [['auto', 'Any language'], ['en', 'English'], ['ur', 'Urdu'], ['hi', 'Hindi'], ['ar', 'Arabic'],
   ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['pt', 'Portuguese'], ['tr', 'Turkish']];
 const STEPS = [  // workflow step name, weight, what the phone says
@@ -148,7 +156,35 @@ function drawOptions() {
   $('#opt-lang').innerHTML = LANGS.map(([v, t]) => `<option value="${v}" ${opts.language === v ? 'selected' : ''}>${t}</option>`).join('');
   $('#opt-focus').value = opts.focus || '';
 }
+function ytId(url) { const m = (url || '').match(/(?:youtu\.be\/|v=|\/shorts\/|\/live\/|\/embed\/)([A-Za-z0-9_-]{11})/); return m ? m[1] : null; }
+function layoutPreview(kind, img) {        // the video's thumbnail framed like the layout will frame it
+  const bg = `background-image:url('${img}')`;
+  const blur = `<div class="lp-blur" style="${bg}"></div>`;
+  switch (kind) {
+    case 'auto': return `<div class="lp-cover" style="${bg}"></div><i class="lp-follow"></i>`;
+    case 'center': return `<div class="lp-cover" style="${bg}"></div>`;
+    case 'fit': return `${blur}<div class="lp-fit" style="${bg}"></div>`;
+    case 'fit_big': return `${blur}<div class="lp-fit big" style="${bg}"></div>`;
+    case 'fit_black': return `<div class="lp-fit" style="${bg}"></div>`;
+    case 'split_two': return `<div class="lp-half" style="${bg};background-position:28% center"></div><div class="lp-half bot" style="${bg};background-position:72% center"></div><i class="lp-seam"></i>`;
+    case 'split_wide': return `<div class="lp-half" style="${bg}"></div><div class="lp-half bot">${blur}<div class="lp-fit" style="${bg}"></div></div><i class="lp-seam"></i>`;
+  }
+  return '';
+}
+function drawLayouts() {
+  const id = ytId($('#url').value);
+  $('#layoutWrap').classList.toggle('hidden', !id);
+  if (!id) return;
+  const img = `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
+  $('#layouts').innerHTML = LAYOUT_CARDS.map(([k, name, sub]) => `<div class="lcard ${opts.layout === k ? 'on' : ''}" data-k="${k}">
+      <div class="lp">${layoutPreview(k, img)}</div><b>${esc(name)}</b><span>${esc(sub)}</span></div>`).join('');
+}
 function wireOptions() {
+  $('#url').addEventListener('input', () => { clearTimeout(drawLayouts.t); drawLayouts.t = setTimeout(drawLayouts, 300); });
+  $('#layouts').onclick = e => {
+    const c = e.target.closest('.lcard'); if (!c) return;
+    opts.layout = c.dataset.k; saveOpts(); custom(); drawOptions(); drawLayouts();
+  };
   $('#templates').onclick = e => {
     const c = e.target.closest('.tpl'); if (!c) return;
     const t = TEMPLATES.find(x => x.id === c.dataset.id);
@@ -164,7 +200,7 @@ function wireOptions() {
   $('#opt-lang').onchange = e => { opts.language = e.target.value; saveOpts(); };
   $('#opt-focus').oninput = e => { opts.focus = e.target.value; saveOpts(); };
   $('#pasteBtn').onclick = async () => {
-    try { const t = (await navigator.clipboard.readText()).trim(); if (t) $('#url').value = t; else toast('Clipboard is empty'); }
+    try { const t = (await navigator.clipboard.readText()).trim(); if (t) { $('#url').value = t; drawLayouts(); } else toast('Clipboard is empty'); }
     catch { toast('Long-press the box and tap Paste'); $('#url').focus(); }
   };
   $('#goBtn').onclick = start;
