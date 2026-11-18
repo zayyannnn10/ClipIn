@@ -210,3 +210,7 @@ details.more summary::after { content: " ▾"; }
 .job-live .t { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .job-live .t .cancel { float: none; flex: none; }
 .err.muted-err { color: var(--muted); background: rgba(255,255,255,0.04); }
+
+.tab-head > div { display: flex; gap: 6px; }
+.job .meta .cancel { margin-top: -2px; }
+.seg button { padding: 10px 2px; }

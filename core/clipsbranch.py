@@ -55,9 +55,12 @@ def update(remote, change, say=print, message="update"):
                 _git("checkout", "-q", "FETCH_HEAD", "--", ".", cwd=w)
             index = json.loads((w / "index.json").read_text(encoding="utf-8")) if (w / "index.json").exists() else []
             index = change(w, index)
-            for old in index[KEEP_JOBS:]:
-                shutil.rmtree(w / "jobs" / old["job"], ignore_errors=True)
             index = index[:KEEP_JOBS]
+            keep = {j["job"] for j in index}
+            if (w / "jobs").is_dir():                  # cleared from the phone, or older than the last 20
+                for d in (w / "jobs").iterdir():
+                    if d.name not in keep:
+                        shutil.rmtree(d, ignore_errors=True)
             (w / "index.json").write_text(json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
             _git("checkout", "-q", "--orphan", "fresh", cwd=w)
             _git("add", "-A", cwd=w)

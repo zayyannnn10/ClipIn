@@ -231,7 +231,7 @@ def find(transcript, title, n, length_key, focus, on_progress, heatmap=None):
     for c in sorted(cands, key=lambda c: -c["score"]):
         if all(_overlap(c, u) < 0.5 for u in uniq):
             uniq.append(c)
-    uniq = uniq[:max(want, 8)]
+    uniq = uniq[:max(n + 10, min(want, 60), 8)]          # judge at most ~60 at once
     for c in uniq:
         c["replay"] = replay(c["start"], c["end"], heatmap)
     on_progress(len(groups) / (len(groups) + 1), f"AI is comparing {len(uniq)} possible clips...")

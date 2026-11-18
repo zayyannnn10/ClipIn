@@ -79,7 +79,8 @@ def _cookie_error(msg):
 def fetch(url, outdir: Path, on_progress, section=None, name="source"):
     """Returns (path, info). on_progress(fraction, message).
     section=(start, end) downloads only that part of the video (used to re-render a clip)."""
-    import yt_dlp
+    from core.deps import require
+    yt_dlp = require("yt_dlp", lambda m: on_progress(0.0, m))
 
     seen = {"files": 0}
 

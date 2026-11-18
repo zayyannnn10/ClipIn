@@ -1,7 +1,7 @@
 /* ClipIn phone app. Talks only to GitHub: starts a cloud run with the link, follows its steps for live
    progress, and shows the finished clips from the `clips` branch. No AI keys on the phone. */
 'use strict';
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 const $ = s => document.querySelector(s);
 const store = {
   get(k, d) { try { const v = JSON.parse(localStorage.getItem('clipin.' + k)); return v ?? d; } catch { return d; } },
@@ -28,7 +28,7 @@ const TPL_BASE = { format: '9:16', layout: 'auto', caption_style: 'Bold Pop', ho
 const CAPTIONS = ['Bold Pop', 'Two Tone', 'One Word', 'Neon', 'Fire', 'Ice', 'Rainbow', 'Pastel', 'Karaoke', 'Boxed',
   'Typewriter', 'Clean', 'Subtitle', 'None'];
 const LENGTHS = [['15-30', '15–30 s'], ['30-60', '30–60 s'], ['60-90', '60–90 s']];
-const COUNTS = [[3, '3 clips'], [6, '6 clips'], [9, '9 clips'], [12, '12 clips']];
+const COUNTS = [[3, '3'], [6, '6'], [9, '9'], [12, '12'], [20, '20'], [30, '30'], [40, '40']];
 const FORMATS = [['9:16', '9:16'], ['1:1', '1:1'], ['16:9', '16:9']];
 const LAYOUTS = [['auto', 'Follow'], ['fit', 'Blur'], ['fit_big', 'Big'], ['split_two', 'Split'],
   ['split_wide', 'Face+shot'], ['fit_black', 'Black'], ['center', 'Center']];
@@ -328,6 +328,30 @@ async function cancelJob(job) {
   } catch (e) { toast("Couldn't cancel: " + e.message, 4000); }
 }
 
+async function clearJobs(ids, ask = true) {
+  if (!ids.length) return;
+  if (ask && !confirm(ids.length > 1 ? `Clear ${ids.length} finished videos from this list? Their clips are deleted too.`
+    : 'Clear this video from the list? Its clips are deleted too.')) return;
+  try {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const f = await gh(`${repo()}/contents/index.json?ref=clips`).catch(() => null);
+      if (!f) break;
+      const list = JSON.parse(unb64(f.content));
+      const keep = list.filter(x => !ids.includes(x.job));
+      if (keep.length === list.length) break;     // only on this phone
+      try {
+        await gh(`${repo()}/contents/index.json`, { method: 'PUT', body: { message: `clear ${ids.length} job(s)`,
+          branch: 'clips', sha: f.sha, content: b64(JSON.stringify(keep, null, 1)) } });
+        break;
+      } catch (err) { if (attempt === 3) throw err; await new Promise(r => setTimeout(r, 1500)); }
+    }
+    index = index.filter(x => !ids.includes(x.job)); store.set('index', index);
+    for (const id of ids) delete results[id];
+    store.set('results', results);
+    $('#jobs').dataset.sig = ''; drawJobs(); toast(ids.length > 1 ? `Cleared ${ids.length} videos` : 'Cleared');
+  } catch (e) { toast("Couldn't clear: " + e.message, 4000); }
+}
+
 function notePhoneError(p, msg) {
   index.unshift({ job: p.job, title: p.url, created: p.created / 1000, clips: 0, error: msg, local: true, status: 'error' });
   store.set('index', index);
@@ -368,14 +392,18 @@ async function drawJobs() {
     box.innerHTML = list.map(j => {
       const working = j.status === 'starting' || ACTIVE.has(j.status);
       const meta = working ? `<span class="live-dot"></span>${esc(stageOf(j))}<button class="cancel" data-cancel="${esc(j.job)}">Cancel</button>`
-        : `${j.created ? ago(j.created * 1000) : ''}${j.error ? '' : ` · ${j.clips} clips`}${j.by === 'laptop' ? ' · made on your laptop' : ''}`;
+        : `${j.created ? ago(j.created * 1000) : ''}${j.error ? '' : ` · ${j.clips} clips`}${j.by === 'laptop' ? ' · made on your laptop' : ''}<button class="cancel" data-clear="${esc(j.job)}">Clear</button>`;
       return `<div class="job" data-job="${esc(j.job)}">
         <h3>${esc(j.title || 'Untitled video')}</h3><div class="meta">${meta}</div>
         ${j.status === 'cancelled' ? '<div class="err muted-err">Cancelled</div>' : j.error ? `<div class="err">${esc(j.error)}</div>` : `<div class="thumbs">${working ? skeletons(3) : ''}</div>`}
       </div>`;
     }).join('');
   }
-  box.onclick = e => { const c = e.target.closest('[data-cancel]'); if (c) cancelJob(c.dataset.cancel); };
+  box.onclick = e => {
+    const c = e.target.closest('[data-cancel]'); if (c) return cancelJob(c.dataset.cancel);
+    const x = e.target.closest('[data-clear]'); if (x) return clearJobs([x.dataset.clear]);
+  };
+  $('#clearAllBtn').classList.toggle('hidden', !finishedJobs().length);
   for (const j of list) {
     if (j.error || j.status === 'starting' || j.status === 'cancelled') continue;
     const working = ACTIVE.has(j.status);
@@ -533,6 +561,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#connectBtn').onclick = connect;
   wireOptions();
   document.querySelectorAll('.tabbar button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
+  $('#clearAllBtn').onclick = () => clearJobs(finishedJobs().map(j => j.job));
   $('#refreshBtn').onclick = () => loadIndex().then(drawJobs).then(() => toast('Up to date')).catch(e => toast(e.message));
   $('#reconnectBtn').onclick = () => { $('#code').value = ''; showConnect(); };
   $('#updateBtn').onclick = async () => {
