@@ -13,10 +13,14 @@ from core.paths import CONFIG, ROOT
 
 DEFAULTS = {
     "ai": {
-        "provider": "gemini",          # gemini | groq | ollama  (picks the clip moments)
+        "provider": "gemini",          # gemini | groq | omniroute | ollama  (picks the clip moments)
         "fallback": True,              # if the chosen AI fails, try the others that have a key
         "gemini_model": "auto",
         "groq_model": "auto",
+        # OmniRoute: one local address that switches to another AI when one hits its limit
+        "omni_url": "http://localhost:20128/v1",
+        "omni_model": "auto",          # auto = OmniRoute's own fallback chain, or a combo name
+        "omni_autostart": True,        # start OmniRoute in the background when it isn't running
         "ollama_model": "qwen2.5:7b",
         "ollama_url": "http://localhost:11434",
         "ollama_ctx": 8192,
@@ -49,6 +53,7 @@ DEFAULTS = {
         "caption_style": "Bold Pop",
         "language": "auto",
         "hook_on": True,
+        "thumbnail": True,              # make a thumbnail for every clip
         "focus": "",
     },
     "keys": {
@@ -57,7 +62,7 @@ DEFAULTS = {
     },
 }
 
-SECRET_KEYS = {"gemini_api_key": "", "groq_api_key": "", "github_token": ""}
+SECRET_KEYS = {"gemini_api_key": "", "groq_api_key": "", "github_token": "", "omniroute_api_key": ""}
 
 
 def _merge(base, over):

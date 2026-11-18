@@ -3,3 +3,4 @@ requests
 google-genai>=1.30
 opencv-python-headless>=4.8
 numpy
+pillow

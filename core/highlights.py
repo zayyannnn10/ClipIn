@@ -96,11 +96,12 @@ For each clip give:
 - end: end time in seconds
 - title: a catchy social media title, at most 8 words
 - hook: one line of on-screen text for the first seconds, at most 10 words
+- thumb: 2 to 4 punchy words for the thumbnail picture (no hashtags, no emoji)
 - reason: why this moment works, one sentence
 - score: 0-100, how likely it is to perform well (be strict: 90+ only for exceptional moments)
 Write title and hook in the same language as the transcript.
 
-Reply as JSON: {{"clips": [{{"start": 0.0, "end": 0.0, "title": "", "hook": "", "reason": "", "score": 0}}]}}
+Reply as JSON: {{"clips": [{{"start": 0.0, "end": 0.0, "title": "", "hook": "", "thumb": "", "reason": "", "score": 0}}]}}
 
 TRANSCRIPT:
 {lines}"""
@@ -143,6 +144,7 @@ def _snap(c, sents, lo, hi):
     return {"start": round(start, 2), "end": round(end, 2),
             "title": str(c.get("title") or "").strip()[:90] or "Untitled clip",
             "hook": str(c.get("hook") or "").strip()[:90],
+            "thumb_text": str(c.get("thumb") or "").strip()[:40],
             "reason": str(c.get("reason") or "").strip()[:240],
             "score": _num(c.get("score"), 50)}
 
@@ -163,7 +165,7 @@ def _overlap(a, b):
 
 def _judge(cands, sents, title, n, focus, prov=None):
     blocks = []
-    per_clip = 1600 if prov != "groq" else 380        # Groq's free limit is small: shorter excerpts
+    per_clip = {"groq": 380, "omniroute": 700}.get(prov, 1600)   # small free limits: shorter excerpts
     for k, c in enumerate(cands, 1):
         text = " ".join(s["text"] for s in sents if s["e"] > c["start"] and s["s"] < c["end"])
         rp = c.get("replay")
@@ -215,6 +217,7 @@ def find(transcript, title, n, length_key, focus, on_progress, heatmap=None):
         try:
             return _find_with(prov, sents, title, n, lo, hi, focus, heatmap, on_progress)
         except ai.AIError as e:
+            ai.STATUS = None
             log.warning("highlights with %s failed: %s", prov, e)
             errors.append(f"{ai.NAMES[prov]}: {e}")
             if prov != plist[-1]:
@@ -230,6 +233,7 @@ def _find_with(prov, sents, title, n, lo, hi, focus, heatmap, on_progress):
     for k, g in enumerate(groups):
         on_progress(k / (len(groups) + 1), f"AI is reading part {k + 1} of {len(groups)}..." if len(groups) > 1
                     else "AI is reading the transcript...")
+        ai.STATUS = lambda m, f=k / (len(groups) + 1): on_progress(f, m)    # live "trying another model..."
         try:
             data, _p, model = ai.ask(_prompt(g, title, per, lo, hi, focus, heatmap), SYSTEM, only=prov)
         except ai.AIError as e:                        # one part failed: keep the other parts' moments
@@ -253,14 +257,17 @@ def _find_with(prov, sents, title, n, lo, hi, focus, heatmap, on_progress):
     for c in sorted(cands, key=lambda c: -c["score"]):
         if all(_overlap(c, u) < 0.5 for u in uniq):
             uniq.append(c)
-    uniq = uniq[:max(n + 10, min(want, 60 if prov != "groq" else 24), 8)]   # judge at most ~60 at once
+    uniq = uniq[:max(n + 10, min(want, {"groq": 24, "omniroute": 40}.get(prov, 60)), 8)]   # judge at most ~60 at once
     for c in uniq:
         c["replay"] = replay(c["start"], c["end"], heatmap)
     on_progress(len(groups) / (len(groups) + 1), f"AI is comparing {len(uniq)} possible clips...")
+    ai.STATUS = lambda m, f=len(groups) / (len(groups) + 1): on_progress(f, m)
     try:
         _judge(uniq, sents, title, n, focus, prov)
     except Exception as e:                             # the first pass is still a good answer
         log.warning("judge pass failed, using first-pass scores: %s", e)
+    finally:
+        ai.STATUS = None
     for c in uniq:                                     # real viewer data nudges the final score
         if c.get("replay") is not None:
             c["score"] = int(round(0.8 * c["score"] + 0.2 * c["replay"] * 100))

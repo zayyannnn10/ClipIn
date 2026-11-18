@@ -24,6 +24,8 @@ import time
 from pathlib import Path
 
 KEEP_JOBS = 20
+BUDGET = 3 * 1024 ** 3                         # the clips branch stays under ~3 GB: oldest jobs go first
+PHONE_MAX = 40 * 1024 ** 2                     # clips bigger than this get a lighter phone copy
 
 
 class Cancelled(Exception):
@@ -61,6 +63,7 @@ def update(remote, change, say=print, message="update"):
                 for d in (w / "jobs").iterdir():
                     if d.name not in keep:
                         shutil.rmtree(d, ignore_errors=True)
+            index = _fit_budget(w, index)
             (w / "index.json").write_text(json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
             _git("checkout", "-q", "--orphan", "fresh", cwd=w)
             _git("add", "-A", cwd=w)
@@ -72,6 +75,43 @@ def update(remote, change, say=print, message="update"):
         say("Someone else saved at the same moment, trying again...")
         time.sleep(3 + attempt * 2)
     raise RuntimeError("Couldn't save to the clips branch (too many jobs at once).")
+
+
+def _fit_budget(w, index):
+    """Drop the oldest finished jobs until the branch is under BUDGET (jobs still being made are kept)."""
+    def size(job):
+        d = w / "jobs" / job
+        return sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) if d.is_dir() else 0
+    sizes = {j["job"]: size(j["job"]) for j in index}
+    total = sum(sizes.values())
+    keep = list(index)
+    for j in reversed(index):                          # oldest first
+        if total <= BUDGET:
+            break
+        if j.get("status") in ("working", "laptop", "laptop-working"):
+            continue
+        keep.remove(j)
+        total -= sizes[j["job"]]
+        shutil.rmtree(w / "jobs" / j["job"], ignore_errors=True)
+    return keep
+
+
+def phone_copy(file):
+    """A lighter copy for the phone (same 1080x1920, ~5 Mbit/s) when the clip is big. Cached next to the clip."""
+    from core import media
+    src = Path(file)
+    if src.stat().st_size <= PHONE_MAX:
+        return src
+    out = src.with_name("phone.mp4")
+    if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
+        return out
+    tmp = src.with_name("phone.tmp.mp4")
+    v = (["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "27", "-b:v", "5M", "-maxrate", "6M",
+          "-bufsize", "12M", "-profile:v", "high"] if media.nvenc_ok() else
+         ["-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-maxrate", "6M", "-bufsize", "12M"])
+    media.run(["-i", str(src), *v, "-c:a", "copy", "-movflags", "+faststart", tmp.name], cwd=str(src.parent))
+    tmp.replace(out)
+    return out
 
 
 def _entry(index, job):
@@ -131,10 +171,15 @@ def build(job, p, by="cloud"):
                                       "status", "error", "yt")}
         item["duration"] = round(float(c["end"]) - float(c["start"]), 1)
         if c.get("status") == "done" and Path(c.get("file", "")).exists():
-            files.append((c["file"], f"{c['id']}.mp4"))
+            try:
+                vid = phone_copy(c["file"])
+            except Exception:                          # no lighter copy: send the clip itself
+                vid = Path(c["file"])
+            files.append((str(vid), f"{c['id']}.mp4"))
             item["file"] = f"jobs/{job}/{c['id']}.mp4"
-            if c.get("thumb") and Path(c["thumb"]).exists():
-                files.append((c["thumb"], f"{c['id']}.jpg"))
+            pic = c.get("cover") if c.get("cover") and Path(c["cover"]).exists() else c.get("thumb")
+            if pic and Path(pic).exists():
+                files.append((pic, f"{c['id']}.jpg"))
                 item["thumb"] = f"jobs/{job}/{c['id']}.jpg"
         clips.append(item)
     clips.sort(key=lambda c: -int(c.get("score") or 0))

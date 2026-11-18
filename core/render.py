@@ -9,6 +9,8 @@ Layouts (9:16 unless noted):
   center      centre crop
   split_two   two speakers: left person on top, right person below
   split_wide  speaker on top, the full shot below
+  split_game  (chosen automatically for auto / split_wide) gameplay stream: the streamer's webcam on top,
+              the game below
 """
 import os
 import time
@@ -79,9 +81,39 @@ def render_clip(pdir: Path, proj, clip, transcript, on_progress):
         layout = "fit"                                 # the source is already as narrow as the target
     n = int(dur * fps) + 1
     zoom = reframe.zoom_curve(reframe.zoom_points(words, start, end), fps, dur) if zoom_on else None
-    find = lambda: reframe.detect(src, start, end, sw, sh, lambda f: on_progress(f * 0.3, "Finding the speakers..."))  # noqa: E731
+    _found = {}
+
+    def find():                                        # faces are looked for once per clip
+        if "s" not in _found:
+            _found["s"] = reframe.detect(src, start, end, sw, sh,
+                                         lambda f: on_progress(f * 0.3, "Finding the speakers..."))
+        return _found["s"]
 
     chain = None
+    if layout in ("auto", "split_wide") and fmt == "9:16":
+        # gameplay with a streamer webcam: webcam on top, the game below (following a tiny webcam with a
+        # tall crop, or showing it inside the whole frame, both look wrong)
+        on_progress(0.0, "Looking for the streamer's webcam...")
+        cam = reframe.find_facecam(find(), sw, sh)
+        rect = None
+        if cam:
+            frames, scale = reframe.sample_frames(src, start, end, sw, sh)
+            rect, borders = reframe.cam_rect(frames, scale, cam, sw, sh)  # the webcam's real border
+            if borders < 2:                            # no overlay box: a wide shot (podcast), not a stream
+                cam = None
+        if cam:
+            H1 = int(H * 0.42) // 2 * 2
+            H2 = H - H1
+            tx, ty, tw, th = reframe.crop_in_rect(rect, cam, W, H1, sw)
+            if tw < sw * 0.1:                                            # border found too tight: use the face
+                tx, ty, tw, th = reframe.facecam_crop(cam, sw, sh, W, H1)
+            bars = reframe.black_bars(frames, scale, sh, *(0, sw))
+            gx, gy, gw, gh = reframe.game_crop2(rect, sw, sh, W, H2, bars)
+            chain = (f"[0:v]split=2[s1][s2];"
+                     f"[s1]crop={tw}:{th}:{tx}:{ty},scale={W}:{H1}:flags=lanczos{_sharp(th, H1)},setsar=1[t];"
+                     f"[s2]crop={gw}:{gh}:{gx}:{gy},scale={W}:{H2}:flags=lanczos{_sharp(gh, H2)},setsar=1[b];"
+                     f"[t][b]vstack=2,drawbox=x=0:y={H1 - 3}:w={W}:h=6:color=black@0.85:t=fill[v0]")
+            layout = "split_game"
     if layout == "auto":
         on_progress(0.0, "Finding the speaker...")
         samples = find()
@@ -138,6 +170,18 @@ def render_clip(pdir: Path, proj, clip, transcript, on_progress):
         bh_ = max(8, H // 160)
         inputs += ["-f", "lavfi", "-i", f"color=c=0x{bar_color}:s={W}x{bh_}:r={fps:.3f}"]
         post += f"[base];[base][1:v]overlay=x='-w+w*t/{dur:.3f}':y=H-h:eval=frame:shortest=1"
+    thumb_on = bool(_opt(clip, opts, "thumbnail", True))
+    extra_out = []
+    if thumb_on:                                       # clean frames for the thumbnail, from the same render
+        from core import thumbnail
+        td = thumbnail.thumbs_dir(cdir)
+        td.mkdir(exist_ok=True)
+        for old in td.glob("tc_*.jpg"):
+            old.unlink()
+        tail, extra_out = thumbnail.candidate_output(dur)
+        chain = chain + f";[v0]split=2[v0m][v0t];[v0t]{tail}[tc]"
+        post = "[v0m]" + post[len("[v0]"):]
+        extra_out = ["-map", "[tc]", *extra_out]
     graph = chain + ";" + post + ",format=yuv420p[v]"
     maps = ["-map", "[v]"]
     if proj.get("has_audio", True):
@@ -145,10 +189,10 @@ def render_clip(pdir: Path, proj, clip, transcript, on_progress):
         maps += ["-map", "[a]", "-c:a", "aac", "-b:a", "192k"]
 
     tmp = cdir / "clip.tmp.mp4"
-    base = 0.3 if layout in ("auto", "split_two", "split_wide") else 0.0
+    base = 0.3 if layout in ("auto", "split_two", "split_wide", "split_game") else 0.0
     media.run([*inputs, "-filter_complex", graph, *maps, "-t", f"{dur:.3f}",
                *media.video_codec_args(cfg.get("render.encoder", "auto")), "-r", f"{fps:.3f}",
-               "-movflags", "+faststart", tmp.name],
+               "-movflags", "+faststart", tmp.name, *extra_out],
               cwd=cdir, duration=dur, on_progress=lambda f: on_progress(base + f * (0.97 - base), "Rendering..."))
     final = cdir / "clip.mp4"
     for i in range(20):
@@ -162,7 +206,16 @@ def render_clip(pdir: Path, proj, clip, transcript, on_progress):
     thumb = cdir / "thumb.jpg"
     media.run(["-ss", f"{min(1.5, dur / 2):.2f}", "-i", final, "-frames:v", "1", "-vf", "scale=360:-2",
                "-q:v", "3", thumb])
+    cover = {}
+    if thumb_on:
+        on_progress(0.98, "Making the thumbnail...")
+        try:
+            cover = thumbnail.make(cdir, clip, layout, style=clip.get("cover_style") or opts.get("thumb_style", "Bold"),
+                                   text=clip.get("cover_text"))
+        except Exception as e:                         # a thumbnail problem never fails the clip
+            from core.log import log
+            log.warning("thumbnail for %s failed: %s", clip.get("id"), e)
     on_progress(1.0, "Done")
     clip.update(file=str(final), thumb=str(thumb), status="done", error="", layout_used=layout,
-                rendered=time.time())
+                rendered=time.time(), **cover)
     return clip

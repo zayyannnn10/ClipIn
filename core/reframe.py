@@ -260,3 +260,204 @@ def write_cmds(path, target, centers, fps, cw, ch, sw, sh, zoom=None, y_center=N
         lines.append(f"{i / fps:.3f} {target} w {w}, {target} h {h}, {target} x {x}, {target} y {y};")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return first
+
+
+# gameplay streams: the streamer's webcam ------------------------------------------------------------
+
+def find_facecam(samples, sw, sh):
+    """A streamer's webcam on a gameplay video: a small face that stays in one place for most of the clip
+    (faces in the game itself move around). Returns (cx, cy, fw, fh) in source pixels, or None when the
+    video isn't a gameplay-with-webcam shot (no face, or a big face filling the picture)."""
+    if not samples:
+        return None
+    faces = [(t, f) for t, fs in samples for f in fs]
+    if not faces:
+        return None
+    small = [(t, f) for t, f in faces if f[3] < 0.33 * sh]          # a webcam face is small in the frame
+    if not small:
+        return None
+    tol_x, tol_y = 0.06 * sw, 0.08 * sh
+    best, best_n = None, 0
+    for _, f in small:                                              # the spot most samples have a face at
+        cx, cy = f[0] + f[2] / 2, f[1] + f[3] / 2
+        hit = {t for t, g in small if abs(g[0] + g[2] / 2 - cx) < tol_x and abs(g[1] + g[3] / 2 - cy) < tol_y}
+        if len(hit) > best_n:
+            best, best_n = (cx, cy), len(hit)
+    if best is None or best_n < 0.45 * len(samples):                # not there most of the time: not a webcam
+        return None
+    near = [f for _, f in small if abs(f[0] + f[2] / 2 - best[0]) < tol_x and abs(f[1] + f[3] / 2 - best[1]) < tol_y]
+    cx = float(np.median([f[0] + f[2] / 2 for f in near]))
+    cy = float(np.median([f[1] + f[3] / 2 for f in near]))
+    fw = float(np.median([f[2] for f in near]))
+    fh = float(np.median([f[3] for f in near]))
+    big = [f for _, f in faces if f[3] >= 0.33 * sh]
+    if len(big) > 0.3 * len(samples):                               # a big face most of the time: not gameplay
+        return None
+    log.info("Webcam found at %.0f,%.0f (face %.0fx%.0f) in %d of %d samples", cx, cy, fw, fh, best_n, len(samples))
+    return cx, cy, fw, fh
+
+
+def facecam_crop(cam, sw, sh, out_w, out_h):
+    """Crop (x, y, w, h) around the webcam for a panel of out_w x out_h: the face a little above the middle,
+    with some of the webcam around it."""
+    cx, cy, fw, fh = cam
+    w = min(max(fw * 3.4, sw * 0.16), sw * 0.6)
+    h = w * out_h / out_w
+    if h > sh:
+        h = sh
+        w = h * out_w / out_h
+    x = min(max(cx - w / 2, 0), sw - w)
+    y = min(max(cy + fh * 0.1 - h / 2, 0), sh - h)
+    return int(x) // 2 * 2, int(y) // 2 * 2, int(w) // 2 * 2, int(h) // 2 * 2
+
+
+def game_crop(cam_box, sw, sh, out_w, out_h):
+    """Crop (x, y, w, h) of the game for a panel of out_w x out_h: the middle of the picture (where the action
+    is), moved a little away from the webcam when the webcam would be in it."""
+    a = out_w / out_h
+    h = sh
+    w = h * a
+    if w > sw:
+        w = sw
+        h = w / a
+    x = (sw - w) / 2
+    if cam_box:
+        cx0, _, cw_, _ = cam_box
+        cam_l, cam_r = cx0, cx0 + cw_
+        if cam_l < x + w and cam_r > x:                             # the webcam is inside the game crop
+            limit = sw * 0.22                                       # never move far from the action
+            if (cam_l + cam_r) / 2 < sw / 2:
+                x = min(x + min(limit, cam_r - x), sw - w)
+            else:
+                x = max(x - min(limit, x + w - cam_l), 0)
+    y = (sh - h) / 2
+    return int(x) // 2 * 2, int(y) // 2 * 2, int(w) // 2 * 2, int(h) // 2 * 2
+
+
+def sample_frames(src, start, end, sw, sh, n=12, width=640):
+    """A few small grey frames spread over the clip (for finding the webcam's edges and black bars)."""
+    import cv2
+    cap = cv2.VideoCapture(str(src))
+    if not cap.isOpened():
+        return [], 1.0
+    size = (width, max(2, int(sh * width / sw)))
+    out = []
+    for i in range(n):
+        cap.set(cv2.CAP_PROP_POS_MSEC, (start + (i + 0.5) * (end - start) / n) * 1000)
+        ok, fr = cap.read()
+        if ok:
+            out.append(cv2.cvtColor(cv2.resize(fr, size), cv2.COLOR_BGR2GRAY).astype(np.int16))
+    cap.release()
+    return out, sw / width
+
+
+def _edge(score, lo, hi, prefer_far=False):
+    """Index of the strongest steady edge between lo and hi, or None when no clear edge is there."""
+    lo, hi = max(0, int(lo)), min(len(score), int(hi))
+    if hi - lo < 3:
+        return None
+    seg = score[lo:hi]
+    i = int(np.argmax(seg))
+    if seg[i] < 10 or seg[i] < 2.2 * float(np.median(seg)):
+        return None
+    return lo + i
+
+
+def cam_rect(frames, scale, cam, sw, sh):
+    """The webcam's box (x0, y0, x1, y1) in source pixels, from its border lines: they stay put while the game
+    moves, so they stand out in the median edge strength. Missing edges are guessed from the face size."""
+    cx, cy, fw, fh = (v / scale for v in cam)
+    if not frames:
+        return _guess_rect(cam, sw, sh), 0
+    h, w = frames[0].shape
+    rows = slice(max(0, int(cy - fh)), min(h, int(cy + fh)))
+    cols = slice(max(0, int(cx - fw)), min(w, int(cx + fw)))
+    colscore = np.median([np.abs(np.diff(f[rows], axis=1)).mean(axis=0) for f in frames], axis=0)
+    rowscore = np.median([np.abs(np.diff(f[:, cols], axis=0)).mean(axis=1) for f in frames], axis=0)
+    g = _guess_rect(cam, sw, sh)
+    near_l, near_r = cx - fw * 0.9, cx + fw * 0.9
+    near_t, near_b = cy - fh * 0.9, cy + fh * 0.9
+    r = _edge(colscore, near_r, cx + fw * 10)
+    l = _edge(colscore, cx - fw * 10, near_l)
+    b = _edge(rowscore, near_b, cy + fh * 8)
+    t = _edge(rowscore, cy - fh * 8, near_t)
+    x0 = (l + 1) * scale if l is not None else (0 if cx - fw * 10 <= 0 else g[0])
+    x1 = (r + 1) * scale if r is not None else (sw if cx + fw * 10 >= w else g[2])
+    y0 = (t + 1) * scale if t is not None else (0 if cy - fh * 8 <= 0 else g[1])
+    y1 = (b + 1) * scale if b is not None else (sh if cy + fh * 8 >= h else g[3])
+    pad = 3 * scale                                   # stay a little inside a found border (no game sliver)
+    x0 += pad if l is not None else 0
+    x1 -= pad if r is not None else 0
+    y0 += pad if t is not None else 0
+    y1 -= pad if b is not None else 0
+    found = sum(e is not None for e in (l, r, t, b))
+    log.info("Webcam box %.0f,%.0f to %.0f,%.0f (%d border lines found)", x0, y0, x1, y1, found)
+    return (x0, y0, x1, y1), found
+
+
+def _guess_rect(cam, sw, sh):
+    cx, cy, fw, fh = cam
+    return max(0, cx - fw * 4), max(0, cy - fh * 3), min(sw, cx + fw * 4), min(sh, cy + fh * 3)
+
+
+def crop_in_rect(rect, cam, out_w, out_h, sw):
+    """The biggest out_w:out_h crop inside the webcam box, centred on the face (top panel)."""
+    x0, y0, x1, y1 = rect
+    cx, cy, fw, fh = cam
+    rw, rh = x1 - x0, y1 - y0
+    a = out_w / out_h
+    if rw / max(rh, 1) > a:
+        h = rh
+        w = h * a
+    else:
+        w = rw
+        h = w / a
+    tight = max(fw * 4.5, sw * 0.16)            # keep the face big and in the middle...
+    if w > tight:
+        w, h = tight, tight / a                      # ...but never show anything outside the webcam
+    x = min(max(cx - w / 2, x0), x1 - w)
+    y = min(max(cy + fh * 0.1 - h / 2, y0), y1 - h)
+    return int(x) // 2 * 2, int(y) // 2 * 2, max(2, int(w) // 2 * 2), max(2, int(h) // 2 * 2)
+
+
+def black_bars(frames, scale, sh, x0=0, x1=None):
+    """Rows (top, bottom) of black bars the stream itself has above and below the game, in source pixels."""
+    if not frames:
+        return 0, 0
+    w = frames[0].shape[1]
+    lo, hi = int(x0 / scale), int((x1 or w * scale) / scale)
+    rowmax = np.max([f[:, lo:hi].mean(axis=1) for f in frames], axis=0)   # black in every frame
+    top = 0
+    while top < len(rowmax) and rowmax[top] < 18:
+        top += 1
+    bot = 0
+    while bot < len(rowmax) - top and rowmax[len(rowmax) - 1 - bot] < 18:
+        bot += 1
+    if (top + bot) > 0.4 * len(rowmax):
+        return 0, 0
+    return top * scale, bot * scale
+
+
+def game_crop2(rect, sw, sh, out_w, out_h, bars=(0, 0)):
+    """The game panel: the middle of the picture (where the action is) without the stream's black bars,
+    moved out of the webcam box when the webcam would show in it (never more than 30% of the width)."""
+    a = out_w / out_h
+    top, bot = bars
+    y0, avail = top, sh - top - bot
+    h = avail
+    w = h * a
+    if w > sw:
+        w = sw
+        h = w / a
+    x = (sw - w) / 2
+    if rect:
+        cl, ct, cr, cb = rect
+        overlaps_rows = ct < y0 + h and cb > y0
+        if overlaps_rows and cl < x + w and cr > x:
+            limit = sw * 0.30
+            if (cl + cr) / 2 < sw / 2:
+                x = min(x + min(limit, cr - x), sw - w)
+            else:
+                x = max(x - min(limit, x + w - cl), 0)
+    y = y0 + (avail - h) / 2
+    return int(x) // 2 * 2, int(y) // 2 * 2, int(w) // 2 * 2, int(h) // 2 * 2
