@@ -18,7 +18,6 @@ GROQ_TEXT = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "moonshotai/kimi-
              "qwen/qwen3-32b", "openai/gpt-oss-20b", "llama-3.1-8b-instant"]
 # how many seconds of transcript each provider reads per request
 WINDOW = {"gemini": 4 * 3600, "groq": 480, "ollama": 600}
-FAST_GEMINI = ("gemini-3.5-flash", "gemini-2.5-flash")
 NAMES = {"gemini": "Gemini", "groq": "Groq", "ollama": "Ollama (local)"}
 
 
@@ -77,33 +76,82 @@ def ask(prompt, system, only=None, fast=False):
 
 
 # Gemini -------------------------------------------------------------------------------------------
+# Free Gemini keys change often: models get retired (404), each model has its own small quota (429),
+# and busy models time out (503/504). So ClipIn tries many models, waits and retries when Google says
+# how long to wait, remembers which model worked last time, and never retries a retired model.
 _gem_models = []
+_STATE = None                                         # config/ai_state.json: {"good": model, "dead": [...]}
+GEMINI_BUDGET = 8 * 60                                # give up on Gemini after this many seconds
+
+
+def _state():
+    global _STATE
+    if _STATE is None:
+        from core.paths import CONFIG
+        try:
+            _STATE = json.loads((CONFIG / "ai_state.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _STATE = {}
+        _STATE.setdefault("dead", [])
+    return _STATE
+
+
+def _save_state():
+    from core.paths import CONFIG
+    try:
+        (CONFIG / "ai_state.json").write_text(json.dumps(_STATE, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _ver(n):
+    m = re.search(r"-(\d+(?:\.\d+)?)", n)
+    return float(m.group(1)) if m else 0.0
 
 
 def _gemini_models(client):
     want = cfg.get("ai.gemini_model", "auto")
     if want and want != "auto":
         return [want]
-    if _gem_models:
-        return _gem_models
-    names = []
-    try:
-        for m in client.models.list():
-            if "generateContent" in (m.supported_actions or []):
-                names.append(m.name.replace("models/", ""))
-    except Exception as e:
-        # newer restricted keys may not be allowed to list models but can still generate; the
-        # generate call below decides whether the key really works
-        log.warning("Gemini model list unavailable (%s), using known models", str(e)[:120])
+    if not _gem_models:
+        names = []
+        try:
+            for m in client.models.list():
+                if "generateContent" in (m.supported_actions or []):
+                    names.append(m.name.replace("models/", ""))
+        except Exception as e:
+            # restricted keys may not be allowed to list models but can still generate
+            log.warning("Gemini model list unavailable (%s), using known models", str(e)[:120])
+        text = [n for n in names if n.startswith("gemini-") and not re.search(r"tts|image|audio|live|embed|robotics|computer", n)]
+        flash = sorted((n for n in text if re.fullmatch(r"gemini-[\d.]+-flash(-preview)?", n)),
+                       key=lambda n: (-_ver(n), "preview" in n))
+        lite = sorted((n for n in text if re.fullmatch(r"gemini-[\d.]+-flash-lite(-preview)?", n)),
+                      key=lambda n: (-_ver(n), "preview" in n))
+        known = [] if flash else ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]
+        latest = [n for n in ("gemini-flash-latest", "gemini-pro-latest", "gemini-flash-lite-latest") if n in text or not names]
+        _gem_models[:] = list(dict.fromkeys(flash + known + latest + lite))
+    dead = set(_state()["dead"])
+    good = _state().get("good")
+    models = [m for m in _gem_models if m not in dead]
+    if good in models:                                # the model that answered last time goes first
+        models.remove(good)
+        models.insert(0, good)
+    return models
 
-    def ver(n):
-        m = re.search(r"-(\d+(?:\.\d+)?)", n)
-        return float(m.group(1)) if m else 0.0
-    flash = sorted((n for n in names if re.fullmatch(r"gemini-[\d.]+-flash(-preview)?", n)),
-                   key=lambda n: (-ver(n), "preview" in n))
-    known = [] if flash else ["gemini-3.6-flash", "gemini-3.5-flash"]
-    _gem_models[:] = list(dict.fromkeys(flash[:4] + known + ["gemini-flash-latest", "gemini-2.5-flash"]))
-    return _gem_models
+
+def _retry_delay(s):
+    """Seconds Google asks us to wait (from a 429 answer), or None."""
+    m = re.search(r"retryDelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)s", s) or re.search(r"retry in (\d+(?:\.\d+)?)s", s)
+    return float(m.group(1)) if m else None
+
+
+def _short(s):
+    s = str(s)
+    for code in ("404", "429", "500", "503", "504", "400"):
+        if code in s[:12] or f"'code': {code}" in s:
+            return {"404": "retired", "429": "quota used up", "503": "busy", "504": "too slow",
+                    "500": "server error", "400": "bad request"}[code]
+    return s[:80]
 
 
 def _gemini(prompt, system, fast=False):
@@ -114,28 +162,66 @@ def _gemini(prompt, system, fast=False):
         from google import genai
     except ImportError:
         raise AIError("google-genai isn't installed (pip install google-genai)") from None
-    client = genai.Client(api_key=k, http_options={"timeout": 120_000})   # ms; a stuck model moves on
-    last = None
+    big = len(prompt) > 40_000
+    client = genai.Client(api_key=k, http_options={"timeout": 240_000 if big else 120_000})   # ms
     models = _gemini_models(client)
-    if fast:
-        models = sorted(models, key=lambda m: 0 if m in FAST_GEMINI else 1)
-    for m in models:
-        try:
-            t0 = time.time()
-            r = client.models.generate_content(
-                model=m, contents=prompt,
-                config={"system_instruction": system, "response_mime_type": "application/json",
-                        "temperature": 0.4, "automatic_function_calling": {"disable": True}})
-            log.info("Gemini %s answered in %.1fs", m, time.time() - t0)
-            return parse_json(r.text or ""), m
-        except AIError as e:
-            last = e
-        except Exception as e:
-            s = str(e)
-            if any(x in s for x in ("API_KEY_INVALID", "PERMISSION_DENIED", "401")):
-                raise AIError("Gemini rejected the API key") from None
-            last = e                                  # 404 / quota / busy: try the next model
-    raise AIError(f"no Gemini model answered ({str(last)[:200]})")
+    if fast:                                          # quick jobs: last good model, then the light ones
+        good = _state().get("good")
+        models = sorted(models, key=lambda m: (m != good, "lite" not in m))
+    if not models:
+        raise AIError("no Gemini model is available for this key")
+    start, tried, waits = time.time(), {}, []
+    for rnd in range(3):                              # up to 3 rounds over all models
+        for m in models:
+            if time.time() - start > GEMINI_BUDGET:
+                break
+            if tried.get(m) in ("retired", "daily quota used up"):
+                continue
+            try:
+                t0 = time.time()
+                r = client.models.generate_content(
+                    model=m, contents=prompt,
+                    config={"system_instruction": system, "response_mime_type": "application/json",
+                            "temperature": 0.4, "automatic_function_calling": {"disable": True}})
+                data = parse_json(r.text or "")
+                log.info("Gemini %s answered in %.1fs", m, time.time() - t0)
+                if _state().get("good") != m:
+                    _STATE["good"] = m
+                    _save_state()
+                return data, m
+            except AIError as e:                       # answered, but not valid JSON: next model
+                tried[m] = "bad answer"
+                log.warning("Gemini %s: %s", m, e)
+            except Exception as e:
+                s = str(e)
+                if any(x in s for x in ("API_KEY_INVALID", "PERMISSION_DENIED", "401", "API key not valid")):
+                    raise AIError("Gemini rejected the API key") from None
+                why = _short(s)
+                if why == "retired" or "no longer available" in s or "is not found" in s:
+                    tried[m] = "retired"
+                    if m not in _state()["dead"]:
+                        _STATE["dead"].append(m)
+                        _save_state()
+                elif why == "quota used up":
+                    delay = _retry_delay(s)
+                    daily = "PerDay" in s or (delay is not None and delay > 120)
+                    tried[m] = "daily quota used up" if daily else "quota used up"
+                    if delay and not daily:
+                        waits.append(delay)
+                else:
+                    tried[m] = why
+                log.warning("Gemini %s failed: %s", m, tried[m])
+        usable = [m for m in models if tried.get(m) not in ("retired", "daily quota used up")]
+        if not usable or time.time() - start > GEMINI_BUDGET or rnd == 2:
+            break
+        pause = min(60.0, max(waits) + 2) if waits else 8.0   # Google said "wait N s": wait, then try again
+        log.info("All Gemini models busy or rate-limited; waiting %.0fs and trying again", pause)
+        time.sleep(pause)
+        waits.clear()
+    summary = ", ".join(f"{m} {w}" for m, w in list(tried.items())[:6])
+    if tried and all(w in ("quota used up", "daily quota used up", "retired") for w in tried.values()):
+        raise AIError(f"the free Gemini quota is used up for now ({summary})")
+    raise AIError(f"no Gemini model answered ({summary})")
 
 
 # Groq ---------------------------------------------------------------------------------------------
@@ -191,6 +277,9 @@ def _groq(prompt, system):
             continue
         if r.status_code in (401, 403):
             raise AIError("Groq rejected the API key")
+        if r.status_code == 413:
+            last = f"{m}: the text is too long for Groq's free limit"
+            continue
         if r.status_code >= 400:
             last = f"{m}: HTTP {r.status_code} {r.text[:160]}"
             continue

@@ -161,13 +161,14 @@ def _overlap(a, b):
 
 # pass 2: judge ---------------------------------------------------------------------------------------
 
-def _judge(cands, sents, title, n, focus):
+def _judge(cands, sents, title, n, focus, prov=None):
     blocks = []
+    per_clip = 1600 if prov != "groq" else 380        # Groq's free limit is small: shorter excerpts
     for k, c in enumerate(cands, 1):
         text = " ".join(s["text"] for s in sents if s["e"] > c["start"] and s["s"] < c["end"])
         rp = c.get("replay")
         blocks.append(f"CLIP {k} ({c['end'] - c['start']:.0f}s{f', replay level {rp:.2f}' if rp is not None else ''}):"
-                      f"\n{text[:1600]}")
+                      f"\n{text[:per_clip]}")
     focus_line = f"\nThe user especially wants: {focus.strip()}.\n" if focus and focus.strip() else ""
     prompt = f"""You are choosing which clips from the video{f' "{title}"' if title else ''} to post as short \
 videos. Here are {len(cands)} candidate clips with what is said in each.
@@ -181,7 +182,7 @@ words) and the on-screen hook (max 10 words) if you can, in the clip's language.
 Reply as JSON: {{"clips": [{{"clip": 1, "score": 0, "title": "", "hook": "", "reason": ""}}]}}
 
 {chr(10).join(blocks)}"""
-    data, prov, model = ai.ask(prompt, SYSTEM)
+    data, prov, model = ai.ask(prompt, SYSTEM, only=prov)
     rows = data.get("clips") if isinstance(data, dict) else data
     judged = 0
     for r in rows or []:
@@ -209,14 +210,33 @@ def find(transcript, title, n, length_key, focus, on_progress, heatmap=None):
     if not plist:
         raise RuntimeError("No AI is set up. Add a Gemini or Groq key in Settings, or choose Ollama.")
     heatmap = [h for h in (heatmap or []) if "start_time" in h and "end_time" in h]
-    groups = _windows(sents, ai.WINDOW[plist[0]])
+    errors = []
+    for prov in plist:                                 # each AI reads in part sizes it can handle
+        try:
+            return _find_with(prov, sents, title, n, lo, hi, focus, heatmap, on_progress)
+        except ai.AIError as e:
+            log.warning("highlights with %s failed: %s", prov, e)
+            errors.append(f"{ai.NAMES[prov]}: {e}")
+            if prov != plist[-1]:
+                on_progress(0.0, f"{ai.NAMES[prov]} isn't answering, trying {ai.NAMES[plist[plist.index(prov) + 1]]}...")
+    raise RuntimeError("The AI couldn't pick moments. " + " | ".join(errors))
+
+
+def _find_with(prov, sents, title, n, lo, hi, focus, heatmap, on_progress):
+    groups = _windows(sents, ai.WINDOW[prov])
     want = max(n * 2, n + 4)                           # scout for more, keep the best
     per = want if len(groups) == 1 else max(3, math.ceil(want * 1.3 / len(groups)))
-    cands, used = [], ""
+    cands, used, failed = [], "", []
     for k, g in enumerate(groups):
         on_progress(k / (len(groups) + 1), f"AI is reading part {k + 1} of {len(groups)}..." if len(groups) > 1
                     else "AI is reading the transcript...")
-        data, prov, model = ai.ask(_prompt(g, title, per, lo, hi, focus, heatmap), SYSTEM)
+        try:
+            data, _p, model = ai.ask(_prompt(g, title, per, lo, hi, focus, heatmap), SYSTEM, only=prov)
+        except ai.AIError as e:                        # one part failed: keep the other parts' moments
+            failed.append(str(e))
+            if len(failed) > max(1, len(groups) // 3):
+                raise
+            continue
         used = f"{ai.NAMES[prov]} ({model})"
         clips = data.get("clips") if isinstance(data, dict) else data
         for c in clips or []:
@@ -225,18 +245,20 @@ def find(transcript, title, n, length_key, focus, on_progress, heatmap=None):
                 if fixed:
                     cands.append(fixed)
     if not cands:
+        if failed:
+            raise ai.AIError(failed[-1])
         raise RuntimeError("The AI didn't suggest any usable clips. Try a different length or video.")
     # drop near-duplicates before judging (keep the higher first-pass score)
     uniq = []
     for c in sorted(cands, key=lambda c: -c["score"]):
         if all(_overlap(c, u) < 0.5 for u in uniq):
             uniq.append(c)
-    uniq = uniq[:max(n + 10, min(want, 60), 8)]          # judge at most ~60 at once
+    uniq = uniq[:max(n + 10, min(want, 60 if prov != "groq" else 24), 8)]   # judge at most ~60 at once
     for c in uniq:
         c["replay"] = replay(c["start"], c["end"], heatmap)
     on_progress(len(groups) / (len(groups) + 1), f"AI is comparing {len(uniq)} possible clips...")
     try:
-        _judge(uniq, sents, title, n, focus)
+        _judge(uniq, sents, title, n, focus, prov)
     except Exception as e:                             # the first pass is still a good answer
         log.warning("judge pass failed, using first-pass scores: %s", e)
     for c in uniq:                                     # real viewer data nudges the final score

@@ -116,10 +116,21 @@ def fetch_piece(pdir: Path, p, clip, on_progress=None):
     s0 = max(0.0, float(clip["start"]) - MARGIN)
     s1 = float(clip["end"]) + MARGIN
     work = pdir / "clips" / clip["id"] / "piece"
-    shutil.rmtree(work, ignore_errors=True)
-    work.mkdir(parents=True)
-    part, _ = download.fetch(p["source"], work, on_progress or (lambda f, m="": None), section=(s0, s1), name="part")
-    return work, part.resolve(), s0, s1
+    cb = on_progress or (lambda f, m="": None)
+    last = None
+    for fmt in (download.FMT_PIECE, download.FMT_PIECE_SAFE):   # sharp first, then the safest format
+        shutil.rmtree(work, ignore_errors=True)
+        work.mkdir(parents=True)
+        try:
+            part, _ = download.fetch(p["source"], work, cb, section=(s0, s1), name="part", fmt=fmt)
+            meta = media.probe(part)                  # a piece must have a picture and the whole moment
+            if meta["duration"] < (s1 - s0) * 0.8:
+                raise RuntimeError(f"the piece is only {meta['duration']:.0f}s of {s1 - s0:.0f}s")
+            return work, part.resolve(), s0, s1
+        except Exception as e:
+            last = e
+            log.warning("piece %s (%s) failed: %s", clip["id"], "sharp" if fmt == download.FMT_PIECE else "safe", e)
+    raise RuntimeError(f"Couldn't download this moment: {last}")
 
 
 def prefetch(pdir, p, clips, workers=3):

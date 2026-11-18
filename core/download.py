@@ -32,6 +32,14 @@ class _Logger:
 FMT_1080 = "bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b"
 FMT_1440 = "bv*[height<=1440][height>1080][vcodec!^=av01]+ba/" + FMT_1080   # AV1 decodes far slower
 LONG_VIDEO = 20 * 60
+# Pieces (one moment of a video): FFmpeg must jump into the middle of the file. YouTube's WebM files
+# make it read from the start (minutes per piece, sometimes no picture at all), so pieces use
+# HLS (segmented, only the needed seconds are fetched) at 1440p, or MP4/H.264 at 1080p.
+FMT_PIECE = ("bv*[height<=1440][height>1080][protocol=m3u8_native][vcodec^=vp09]+ba[ext=m4a]/"
+             "bv*[height<=1440][height>1080][protocol=m3u8_native][vcodec^=avc1]+ba[ext=m4a]/"
+             "bv*[height<=1080][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/bv*[height<=1080][ext=mp4][vcodec!^=av01]+ba[ext=m4a]/"
+             "b[ext=mp4][height<=1080]")
+FMT_PIECE_SAFE = "bv*[height<=1080][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/b[ext=mp4][height<=1080]/b[ext=mp4]"
 
 CLIENT_FALLBACKS = [["tv_simply"], ["web_safari"], ["mweb"], ["tv"], ["android_vr"], ["web_embedded"]]
 
@@ -76,9 +84,10 @@ def _cookie_error(msg):
     return f"Couldn't download the video: {msg[:300]}"
 
 
-def fetch(url, outdir: Path, on_progress, section=None, name="source", audio=False):
+def fetch(url, outdir: Path, on_progress, section=None, name="source", audio=False, fmt=None):
     """Returns (path, info). on_progress(fraction, message).
-    section=(start, end) downloads only that part of the video (used to re-render a clip)."""
+    section=(start, end) downloads only that part of the video (used to re-render a clip).
+    fmt overrides the format choice for a section."""
     from core.deps import require
     yt_dlp = require("yt_dlp", lambda m: on_progress(0.0, m))
 
@@ -129,7 +138,7 @@ def fetch(url, outdir: Path, on_progress, section=None, name="source", audio=Fal
         except Exception:
             pass                               # the real download below reports any problem
     else:
-        opts["format"] = FMT_1440                     # a short piece: the sharpest version is still small
+        opts["format"] = fmt or FMT_PIECE             # a short piece: sharp, and quick to cut out
     info, msg = None, ""
     try:
         info = _run(yt_dlp, opts, url)
