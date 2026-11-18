@@ -1,7 +1,7 @@
 /* ClipIn phone app. Talks only to GitHub: starts a cloud run with the link, follows its steps for live
    progress, and shows the finished clips from the `clips` branch. No AI keys on the phone. */
 'use strict';
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const $ = s => document.querySelector(s);
 const store = {
   get(k, d) { try { const v = JSON.parse(localStorage.getItem('clipin.' + k)); return v ?? d; } catch { return d; } },
@@ -210,6 +210,7 @@ function wireOptions() {
 async function start() {
   const url = $('#url').value.trim(), msg = $('#goMsg');
   if (!/^https?:\/\/\S+$/i.test(url)) { setMsg(msg, 'Paste a video link first (https://...).', 'err'); return; }
+  if (pending.some(p => p.url === url && Date.now() - p.created < 60e3)) { toast('Already making clips from this link'); showTab('clips'); return; }
   const job = 'j' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const payload = { url, length: opts.length, count: opts.count, format: opts.format, layout: opts.layout,
     caption_style: opts.caption_style, hook_on: opts.hook_on, zoom: opts.zoom, bar: opts.bar, bar_color: opts.bar_color,
@@ -231,7 +232,7 @@ const ACTIVE = new Set(['working', 'laptop', 'laptop-working']);    // jobs stil
 const activeJobs = () => index.filter(j => ACTIVE.has(j.status));
 const finishedJobs = () => index.filter(j => !ACTIVE.has(j.status));
 function stageOf(j) {
-  if (j.status === 'laptop') return '💻 Waiting for your laptop — open ClipIn on it';
+  if (j.status === 'laptop') return '💻 Sent to your laptop — it starts within a few seconds (ClipIn must be open)';
   return (j.status === 'laptop-working' ? '💻 ' : '') + (j.stage || 'Working');
 }
 function drawActive() {
@@ -273,7 +274,7 @@ async function tick() {
       pending = pending.filter(p => {
         if (known.has(p.job)) {
           const j = index.find(x => x.job === p.job);
-          if (j.status === 'laptop') toast('YouTube blocked the cloud — your laptop will make these clips 💻', 4500);
+          if (j.status === 'laptop') toast('💻 Your laptop is making these clips (YouTube only allows home internet)', 4500);
           return false;
         }
         if (p.done && Date.now() - p.done > 90e3) { notePhoneError(p, `The cloud run ${p.conclusion || 'stopped'} without saving clips.`); return false; }

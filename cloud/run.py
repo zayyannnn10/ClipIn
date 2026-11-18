@@ -101,7 +101,7 @@ def check():
     if blocked:
         say("YouTube blocks GitHub's servers for this video. Handing it to your laptop.")
         clipsbranch.set_entry(remote(), JOB, say, request=req, title=title or url, status="laptop",
-                              stage="Waiting for your laptop", created=CREATED)
+                              stage="Sent to your laptop", created=CREATED)
         output("blocked", "true")
     else:
         say(f"Video OK: {title}")
