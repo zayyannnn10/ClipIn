@@ -1,7 +1,7 @@
 /* ClipIn phone app. Talks only to GitHub: starts a cloud run with the link, follows its steps for live
    progress, and shows the finished clips from the `clips` branch. No AI keys on the phone. */
 'use strict';
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 const $ = s => document.querySelector(s);
 const store = {
   get(k, d) { try { const v = JSON.parse(localStorage.getItem('clipin.' + k)); return v ?? d; } catch { return d; } },
@@ -24,7 +24,8 @@ const TEMPLATES = [
   { id: 'square', name: 'Square Feed', desc: '1:1 on black, boxed captions', format: '1:1', layout: 'fit_black', caption_style: 'Boxed' },
   { id: 'wide', name: 'YouTube Wide', desc: '16:9 for normal videos', format: '16:9', layout: 'fit_black', caption_style: 'Clean', hook_on: false },
 ];
-const TPL_BASE = { format: '9:16', layout: 'auto', caption_style: 'Bold Pop', hook_on: true, zoom: false, bar: false, bar_color: 'FFFFFF' };
+// format and layout are not in TPL_BASE: a caption template keeps the framing you picked
+const TPL_BASE = { caption_style: 'Bold Pop', hook_on: true, zoom: false, bar: false, bar_color: 'FFFFFF' };
 const CAPTIONS = ['Bold Pop', 'Two Tone', 'One Word', 'Neon', 'Fire', 'Ice', 'Rainbow', 'Pastel', 'Karaoke', 'Boxed',
   'Typewriter', 'Clean', 'Subtitle', 'None'];
 const LENGTHS = [['15-30', '15–30 s'], ['30-60', '30–60 s'], ['60-90', '60–90 s']];
@@ -50,7 +51,7 @@ const capImg = n => `captions/${slug(n)}.png`;
 
 let cfg = store.get('cfg', null);           // {o, r, t, priv, branch}
 let opts = store.get('opts', null) || { template: 'viral', length: '30-60', count: 6, language: 'auto', focus: '',
-  ...TPL_BASE, ...TEMPLATES[0] };
+  format: '9:16', layout: 'auto', ...TPL_BASE, ...TEMPLATES[0] };
 delete opts.id; delete opts.name; delete opts.desc;
 let pending = store.get('pending', []);     // jobs started from this phone and not finished yet
 let index = store.get('index', []);         // finished jobs (from the clips branch)

@@ -93,14 +93,22 @@ def render_clip(pdir: Path, proj, clip, transcript, on_progress):
     if layout in ("auto", "split_wide") and fmt == "9:16":
         # gameplay with a streamer webcam: webcam on top, the game below (following a tiny webcam with a
         # tall crop, or showing it inside the whole frame, both look wrong)
-        on_progress(0.0, "Looking for the streamer's webcam...")
-        cam = reframe.find_facecam(find(), sw, sh)
-        rect = None
-        if cam:
-            frames, scale = reframe.sample_frames(src, start, end, sw, sh)
-            rect, borders = reframe.cam_rect(frames, scale, cam, sw, sh)  # the webcam's real border
-            if borders < 2:                            # no overlay box: a wide shot (podcast), not a stream
-                cam = None
+        known = proj.get("cam_info") or {}           # what the first clip of this video found
+        cam = rect = None
+        if known.get("cam"):                           # same stream overlay in every clip: reuse it
+            cam = tuple(v * d for v, d in zip(known["cam"], (sw, sh, sw, sh)))
+            rect = tuple(v * d for v, d in zip(known["rect"], (sw, sh, sw, sh)))
+        elif not known.get("none"):
+            on_progress(0.0, "Looking for the streamer's webcam...")
+            cam = reframe.find_facecam(find(), sw, sh)
+            if cam:
+                frames, scale = reframe.sample_frames(src, start, end, sw, sh)
+                rect, borders = reframe.cam_rect(frames, scale, cam, sw, sh)  # the webcam's real border
+                if borders < 2:                        # no overlay box: a wide shot (podcast), not a stream
+                    cam = None
+            clip["cam_info"] = ({"cam": [cam[0] / sw, cam[1] / sh, cam[2] / sw, cam[3] / sh],
+                                 "rect": [rect[0] / sw, rect[1] / sh, rect[2] / sw, rect[3] / sh]}
+                                if cam else {"none": True})
         if cam:
             H1 = int(H * 0.42) // 2 * 2
             H2 = H - H1

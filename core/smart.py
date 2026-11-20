@@ -165,7 +165,7 @@ def render_clip(pdir: Path, p, clip, transcript, on_progress, piece=None):
         c2 = {**clip, "start": float(clip["start"]) - s0, "end": float(clip["end"]) - s0}
         render.render_clip(pdir, p2, c2, {"words": words}, lambda f, m="": on_progress(0.32 + f * 0.68, m))
         clip.update({k: c2[k] for k in ("file", "thumb", "status", "error", "layout_used", "rendered")})
-        clip.update({k: c2[k] for k in ("cover", "cover_text", "cover_style", "cover_frame", "cover_frames") if k in c2})
+        clip.update({k: c2[k] for k in ("cover", "cover_text", "cover_style", "cover_frame", "cover_frames", "cam_info") if k in c2})
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return clip

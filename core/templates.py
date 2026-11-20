@@ -1,6 +1,7 @@
 """Video templates: one click sets format, framing, caption style and effects together."""
 
-BASE = {"format": "9:16", "layout": "auto", "caption_style": "Bold Pop", "hook_on": True, "zoom": False,
+# format and layout are NOT in BASE: a caption template keeps the framing the user picked
+BASE = {"caption_style": "Bold Pop", "hook_on": True, "zoom": False,
         "bar": False, "bar_color": "FFFFFF"}
 
 TEMPLATES = [
