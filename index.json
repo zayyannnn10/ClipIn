@@ -1,0 +1,62 @@
+[
+ {
+  "job": "pc-20261120-112249-389f",
+  "title": "CARRYMINATI PLAYS GTA VI | NO PROMOTIONS",
+  "created": 1795166569.0793335,
+  "clips": 12,
+  "error": "",
+  "status": "done",
+  "stage": "",
+  "total": 12,
+  "by": "laptop",
+  "thumb": "jobs/pc-20261120-112249-389f/c01.jpg"
+ },
+ {
+  "job": "jmwo60rpzjq9y",
+  "title": "https://youtu.be/kR8bhkVAgBY?is=cgMk37lo3tqUqb-c",
+  "created": 1795129960.3078203,
+  "clips": 0,
+  "error": "Laptop: [Errno 2] No such file or directory: 'C:\\\\Users\\\\zayya\\\\Downloads\\\\ClipIn AI\\\\projects\\\\20261120-110954-3dbb\\\\project.json.tmp'",
+  "status": "error",
+  "stage": "",
+  "total": 0,
+  "by": "laptop",
+  "thumb": ""
+ },
+ {
+  "job": "jmwo5ifkc9lml",
+  "title": "iShowSpeed's First Time PLaying GTA 6!",
+  "created": 1795129107.724979,
+  "clips": 2,
+  "error": "",
+  "status": "laptop-working",
+  "stage": "2 of 12 clips ready",
+  "total": 12,
+  "by": "laptop",
+  "thumb": "jobs/jmwo5ifkc9lml/c01.jpg"
+ },
+ {
+  "job": "pc-20261118-210017-f8d3",
+  "title": "Playing GTA 6 For The FIRST Time!",
+  "created": 1795028417.379064,
+  "clips": 12,
+  "error": "",
+  "status": "done",
+  "stage": "",
+  "total": 12,
+  "by": "laptop",
+  "thumb": "jobs/pc-20261118-210017-f8d3/c01.jpg"
+ },
+ {
+  "job": "pc-20261118-204231-3e4f",
+  "title": "Playing GTA 6 For The FIRST Time!",
+  "created": 1795027351.9763076,
+  "clips": 2,
+  "error": "",
+  "status": "done",
+  "stage": "",
+  "total": 2,
+  "by": "laptop",
+  "thumb": "jobs/pc-20261118-204231-3e4f/c01.jpg"
+ }
+]
