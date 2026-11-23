@@ -94,7 +94,8 @@ def render_clip(pdir: Path, proj, clip, transcript, on_progress):
         # gameplay with a streamer webcam: webcam on top, the game below (following a tiny webcam with a
         # tall crop, or showing it inside the whole frame, both look wrong)
         known = proj.get("cam_info") or {}           # what the first clip of this video found
-        cam = rect = None
+        cam = rect = frames = None
+        scale = 1.0
         if known.get("cam"):                           # same stream overlay in every clip: reuse it
             cam = tuple(v * d for v, d in zip(known["cam"], (sw, sh, sw, sh)))
             rect = tuple(v * d for v, d in zip(known["rect"], (sw, sh, sw, sh)))
@@ -115,6 +116,8 @@ def render_clip(pdir: Path, proj, clip, transcript, on_progress):
             tx, ty, tw, th = reframe.crop_in_rect(rect, cam, W, H1, sw)
             if tw < sw * 0.1:                                            # border found too tight: use the face
                 tx, ty, tw, th = reframe.facecam_crop(cam, sw, sh, W, H1)
+            if frames is None:                         # webcam reused from the first clip: frames for the bars
+                frames, scale = reframe.sample_frames(src, start, end, sw, sh)
             bars = reframe.black_bars(frames, scale, sh, *(0, sw))
             gx, gy, gw, gh = reframe.game_crop2(rect, sw, sh, W, H2, bars)
             chain = (f"[0:v]split=2[s1][s2];"

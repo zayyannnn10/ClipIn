@@ -20,8 +20,21 @@ GROQ = "https://api.groq.com/openai/v1"
 GROQ_TEXT = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "moonshotai/kimi-k2-instruct",
              "qwen/qwen3-32b", "openai/gpt-oss-20b", "llama-3.1-8b-instant"]
 # how many seconds of transcript each provider reads per request
-WINDOW = {"gemini": 4 * 3600, "groq": 480, "omniroute": 1200, "ollama": 600}
-NAMES = {"gemini": "Gemini", "groq": "Groq", "omniroute": "OmniRoute", "ollama": "Ollama (local)"}
+WINDOW = {"gemini": 4 * 3600, "claude": 3 * 3600, "groq": 480, "omniroute": 1200, "ollama": 600}
+NAMES = {"gemini": "Gemini", "claude": "Claude", "groq": "Groq", "omniroute": "OmniRoute", "ollama": "Ollama (local)"}
+# tokens used by the AI calls of this job (shown on the project page)
+USAGE = {"input": 0, "output": 0, "cache_read": 0, "calls": 0}
+
+
+def reset_usage():
+    USAGE.update(input=0, output=0, cache_read=0, calls=0)
+
+
+def _count(inp=0, out=0, cache=0):
+    USAGE["input"] += int(inp or 0)
+    USAGE["output"] += int(out or 0)
+    USAGE["cache_read"] += int(cache or 0)
+    USAGE["calls"] += 1
 
 
 class AIError(Exception):
@@ -66,6 +79,8 @@ def providers():
             out.append(p)
         elif p == "groq" and key("groq_api_key"):
             out.append(p)
+        elif p == "claude" and p == first and os.environ.get("GITHUB_ACTIONS") != "true":
+            out.append(p)                          # Claude Code on this laptop (your Claude plan)
         elif p == "omniroute" and (p == first or key("omniroute_api_key")) and os.environ.get("GITHUB_ACTIONS") != "true":
             out.append(p)                          # a local program: never in the GitHub cloud
         elif p == "ollama" and p == first:         # local AI only when chosen (it may not be installed)
@@ -83,7 +98,7 @@ def ask(prompt, system, only=None, fast=False):
     for p in plist:
         try:
             data, model = (_gemini(prompt, system, fast) if p == "gemini" else
-                           {"groq": _groq, "omniroute": _omniroute, "ollama": _ollama}[p](prompt, system))
+                           {"claude": _claude, "groq": _groq, "omniroute": _omniroute, "ollama": _ollama}[p](prompt, system))
             return data, p, model
         except AIError as e:
             log.warning("%s failed: %s", p, e)
@@ -201,6 +216,10 @@ def _gemini(prompt, system, fast=False):
                             "temperature": 0.4, "automatic_function_calling": {"disable": True}})
                 data = parse_json(r.text or "")
                 log.info("Gemini %s answered in %.1fs", m, time.time() - t0)
+                um = getattr(r, "usage_metadata", None)
+                if um is not None:
+                    _count(getattr(um, "prompt_token_count", 0), getattr(um, "candidates_token_count", 0),
+                           getattr(um, "cached_content_token_count", 0))
                 if _state().get("good") != m:
                     _STATE["good"] = m
                     _save_state()
@@ -411,6 +430,62 @@ def _omniroute(prompt, system):
             if isinstance(e, AIError):
                 raise
     raise AIError(f"OmniRoute didn't answer ({last})")
+
+
+# Claude (Claude Code on this laptop) --------------------------------------------------------------
+# Runs the `claude` command in print mode with your Claude login: no API key, it uses your Claude plan.
+# No tools, no MCP servers, no saved session: just one question and one JSON answer.
+
+def claude_exe():
+    """The real claude.exe (calling it directly keeps every argument exactly as sent; the .cmd launcher
+    would pass them through cmd.exe)."""
+    npm = os.path.join(os.environ.get("APPDATA", ""), "npm")
+    direct = os.path.join(npm, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe")
+    if os.path.isfile(direct):
+        return direct
+    return shutil.which("claude.exe") or shutil.which("claude") or None
+
+
+def _claude(prompt, system):
+    import tempfile
+    exe = claude_exe()
+    if not exe:
+        raise AIError("Claude Code isn't installed. Install it from claude.com/code, then sign in once.")
+    model = cfg.get("ai.claude_model") or "sonnet"
+    args = [exe, "-p", "--output-format", "json", "--model", model, "--tools", "", "--no-session-persistence",
+            "--strict-mcp-config", "--system-prompt", system]
+    effort = cfg.get("ai.claude_effort") or ""          # low | medium | high: less = faster, lighter on the plan
+    if effort:
+        args += ["--effort", effort]
+    # only your own Claude login: drop settings inherited from another Claude program (session proxies, keys)
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("CLAUDE", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"))}
+    t0 = time.time()
+    _say(f"Asking Claude ({model})...")
+    try:
+        r = subprocess.run(args, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=900, cwd=tempfile.gettempdir(), env=env,
+                           creationflags=0x08000000 if os.name == "nt" else 0)
+    except subprocess.TimeoutExpired:
+        raise AIError("Claude took too long (15 min)") from None
+    try:
+        j = json.loads(r.stdout)
+    except ValueError:
+        raise AIError(f"Claude Code didn't answer ({(r.stderr or r.stdout)[-200:].strip()})") from None
+    u = j.get("usage") or {}
+    _count(u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0), u.get("output_tokens", 0),
+           u.get("cache_read_input_tokens", 0))
+    text = str(j.get("result") or "")
+    if j.get("is_error"):
+        low = text.lower()
+        if "authenticat" in low or "oauth" in low or "login" in low or "log in" in low:
+            raise AIError("Claude Code isn't signed in. Open a terminal, run: claude   then type /login")
+        if "limit" in low or "rate" in low or "quota" in low:
+            raise AIError(f"your Claude plan's limit is reached for now ({text[:160]})")
+        raise AIError(f"Claude: {text[:200]}")
+    log.info("Claude %s answered in %.1fs (in %s, out %s, cached %s tokens)", model, time.time() - t0,
+             u.get("input_tokens"), u.get("output_tokens"), u.get("cache_read_input_tokens"))
+    return parse_json(text), model
 
 
 # Ollama (local) -----------------------------------------------------------------------------------

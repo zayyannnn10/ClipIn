@@ -13,7 +13,9 @@ from core.paths import CONFIG, ROOT
 
 DEFAULTS = {
     "ai": {
-        "provider": "gemini",          # gemini | groq | omniroute | ollama  (picks the clip moments)
+        "provider": "gemini",          # gemini | claude | groq | omniroute | ollama  (picks the clip moments)
+        "claude_model": "sonnet",      # Claude Code on this laptop: sonnet | opus | haiku
+        "claude_effort": "medium",     # low | medium | high: medium was ~40% faster, ~30% fewer tokens, same top picks
         "fallback": True,              # if the chosen AI fails, try the others that have a key
         "gemini_model": "auto",
         "groq_model": "auto",
