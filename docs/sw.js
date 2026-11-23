@@ -1,11 +1,11 @@
 /* ClipIn phone offline copy: the app itself opens instantly and offline; GitHub (runs, clips) always goes
    to the network. Bump VERSION when the app files change so phones pick up the new copy. */
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 const CACHE = 'clipin-' + VERSION;
 const CAPS = ['bold_pop', 'two_tone', 'one_word', 'neon', 'fire', 'ice', 'rainbow', 'pastel', 'karaoke', 'boxed',
   'typewriter', 'clean', 'subtitle'].map(n => `captions/${n}.png`);
 const FILES = ['./', 'index.html', 'app.css', 'app.js', 'manifest.webmanifest',
-  'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png', ...CAPS];
+  'bg_clay.jpg', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png', ...CAPS];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
