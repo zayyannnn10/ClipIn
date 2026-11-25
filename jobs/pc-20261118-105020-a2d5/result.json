@@ -1,0 +1,59 @@
+{
+ "job": "pc-20261118-105020-a2d5",
+ "title": "iShowSpeed vs Cole Palmer EA FC 1v1!",
+ "channel": "Live Speedy",
+ "source": "https://youtu.be/iSKdHn2A4UA",
+ "duration": 4240.0,
+ "created": 1794991820.5549033,
+ "finished": 1795427978.9378822,
+ "options": {
+  "length": "30-60",
+  "count": 2,
+  "format": "9:16",
+  "layout": "auto",
+  "caption_style": "Bold Pop",
+  "hook_on": true,
+  "zoom": true,
+  "bar": true,
+  "bar_color": "FFD400",
+  "language": "auto",
+  "focus": ""
+ },
+ "ai": "Gemini (gemini-3.8-flash)",
+ "clips": [
+  {
+   "id": "c01",
+   "title": "Speed Finally Beats Cole Palmer",
+   "hook": "Speed actually beat Cole Palmer in EA FC?!",
+   "reason": "Explosive energy right from second one with an unbelievable climax where Speed claims victory over a Premier League star. Maximum hype, highly shareable, and instantly engaging.",
+   "score": 94,
+   "start": 1776.73,
+   "end": 1826.79,
+   "caption_style": "Bold Pop",
+   "status": "done",
+   "error": "",
+   "yt": null,
+   "duration": 50.1,
+   "file": "jobs/pc-20261118-105020-a2d5/c01.mp4",
+   "thumb": "jobs/pc-20261118-105020-a2d5/c01.jpg"
+  },
+  {
+   "id": "c02",
+   "title": "Speed Calls Dad While Losing 16-0",
+   "hook": "Speed called his dad while losing 16-0 on FIFA.",
+   "reason": "Hilarious comedic dynamic of Speed whining to his dad while getting battered by near-post spam, peaking with the absurd scoreline reveal of 16-0.",
+   "score": 88,
+   "start": 2744.17,
+   "end": 2795.79,
+   "caption_style": "Bold Pop",
+   "status": "done",
+   "error": "",
+   "yt": null,
+   "duration": 51.6,
+   "file": "jobs/pc-20261118-105020-a2d5/c02.mp4",
+   "thumb": "jobs/pc-20261118-105020-a2d5/c02.jpg"
+  }
+ ],
+ "error": "",
+ "by": "laptop"
+}

@@ -1,0 +1,68 @@
+{
+ "job": "pc-20261118-204231-3e4f",
+ "title": "Playing GTA 6 For The FIRST Time!",
+ "channel": "Lacy ",
+ "source": "https://www.youtube.com/watch?v=NxgYtzq_n70",
+ "duration": 2160.0,
+ "created": 1795027351.9763076,
+ "finished": 1795029696.4560406,
+ "options": {
+  "length": "30-60",
+  "count": 2,
+  "format": "9:16",
+  "layout": "split_wide",
+  "caption_style": "Bold Pop",
+  "language": "auto",
+  "hook_on": true,
+  "zoom": true,
+  "bar": true,
+  "bar_color": "FFD400",
+  "template": "",
+  "focus": ""
+ },
+ "ai": "Gemini (gemini-3.1-flash-lite)",
+ "clips": [
+  {
+   "id": "c01",
+   "title": "GTA 6 First Robbery Experience",
+   "hook": "POV: Your first GTA 6 robbery goes wrong",
+   "reason": "High-octane action, immediate conflict, and relatable chaos. It captures the raw intensity of the new gameplay mechanics perfectly.",
+   "score": 92,
+   "start": 249.41,
+   "end": 293.43,
+   "caption_style": "Bold Pop",
+   "status": "done",
+   "error": "",
+   "yt": {
+    "title": "GTA 6 First Robbery Experience",
+    "description": "",
+    "hashtags": [],
+    "tags": [],
+    "privacy": "public",
+    "kids": false,
+    "set_thumb": true
+   },
+   "duration": 44.0,
+   "file": "jobs/pc-20261118-204231-3e4f/c01.mp4",
+   "thumb": "jobs/pc-20261118-204231-3e4f/c01.jpg"
+  },
+  {
+   "id": "c02",
+   "title": "Ordering Food While Being Chased",
+   "hook": "Trying to order fast food while running from cops",
+   "reason": "Hilarious contrast between the high-stakes police chase and the mundane drive-thru interaction. Very shareable comedy.",
+   "score": 88,
+   "start": 344.95,
+   "end": 400.27,
+   "caption_style": "Bold Pop",
+   "status": "done",
+   "error": "",
+   "yt": null,
+   "duration": 55.3,
+   "file": "jobs/pc-20261118-204231-3e4f/c02.mp4",
+   "thumb": "jobs/pc-20261118-204231-3e4f/c02.jpg"
+  }
+ ],
+ "error": "",
+ "by": "laptop"
+}
