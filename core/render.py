@@ -11,6 +11,10 @@ Layouts (9:16 unless noted):
   split_wide  speaker on top, the full shot below
   split_game  (chosen automatically for auto / split_wide) gameplay stream: the streamer's webcam on top,
               the game below
+
+Hook-first opening ("tease"): when the AI marked the clip's best 1-3 seconds, the finished clip is played as
+  teaser (that moment, with the hook text) -> quick white flash -> the whole clip. It's a second, short pass
+  over the rendered clip, so framing and captions are identical; the progress bar then spans the whole video.
 """
 import os
 import time
@@ -54,6 +58,51 @@ def _follow(cdir, name, target, centers, fps, cw, ch, sw, sh, W, H, zoom=None, y
             f"scale={W}:{H}:flags=lanczos{_sharp(ch, H)},setsar=1")
 
 
+def _tease_range(clip, start, end):
+    """The cold-open moment in seconds from the clip's start, or None (missing, or no longer inside the clip
+    after the user changed its timing)."""
+    t = clip.get("tease") or {}
+    try:
+        a, b = float(t["start"]) - start, float(t["end"]) - start
+    except (KeyError, TypeError, ValueError):
+        return None
+    if a < 1.5 or b > end - start + 0.05 or b - a < 0.6:
+        return None
+    return a, min(b, a + 4.0)
+
+
+def _cold_open(cdir, src_name, out_name, ts, te, W, H, fps, dur, hook, hook_on, bar_on, bar_color, has_audio,
+               on_progress):
+    """out = [the clip's best moment] + [the whole clip, fading in from a white flash]."""
+    td = te - ts
+    total = td + dur
+    inputs = ["-ss", f"{ts:.3f}", "-t", f"{td:.3f}", "-i", src_name, "-i", src_name]   # two decoders: no buffering
+    graph = ("[0:v]setpts=PTS-STARTPTS,setsar=1[tv];"
+             "[1:v]setpts=PTS-STARTPTS,fade=t=in:st=0:d=0.28:color=white,setsar=1[mv];")
+    if has_audio:
+        graph += (f"[0:a]asetpts=PTS-STARTPTS,afade=t=out:st={max(0.0, td - 0.08):.3f}:d=0.08[ta];"
+                  "[1:a]asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.06[ma];"
+                  "[tv][ta][mv][ma]concat=n=2:v=1:a=1[cv][ca];")
+    else:
+        graph += "[tv][mv]concat=n=2:v=1:a=0[cv];"
+    post = "[cv]null"
+    ass = cdir / "hook.ass"
+    if hook_on and (hook or "").strip() and captions.build([], 0, total, W, H, "None", hook, True, ass):
+        rel = os.path.relpath(captions.FONTS, cdir).replace("\\", "/")
+        post += f",ass=hook.ass:fontsdir='{rel}'"
+    if bar_on:
+        bh_ = max(8, H // 160)
+        inputs += ["-f", "lavfi", "-i", f"color=c=0x{bar_color}:s={W}x{bh_}:r={fps:.3f}"]
+        post += f"[base];[base][2:v]overlay=x='-w+w*t/{total:.3f}':y=H-h:eval=frame:shortest=1"
+    graph += post + ",format=yuv420p[v]"
+    maps = ["-map", "[v]"] + (["-map", "[ca]", "-c:a", "aac", "-b:a", "192k"] if has_audio else [])
+    media.run([*inputs, "-filter_complex", graph, *maps, "-t", f"{total:.3f}",
+               *media.video_codec_args(cfg.get("render.encoder", "auto")), "-r", f"{fps:.3f}",
+               "-movflags", "+faststart", out_name], cwd=cdir, duration=total, on_progress=on_progress)
+    if ass.exists():
+        ass.unlink()
+
+
 def render_clip(pdir: Path, proj, clip, transcript, on_progress):
     import numpy as np
     src = proj["source_file"]
@@ -73,6 +122,9 @@ def render_clip(pdir: Path, proj, clip, transcript, on_progress):
     bar_on = bool(_opt(clip, opts, "bar", False))
     bar_color = _opt(clip, opts, "bar_color", "FFFFFF")
     words = transcript.get("words") or []
+    tease = _tease_range(clip, start, end) if _opt(clip, opts, "tease_on", True) else None
+    hook_text, hook_on = clip.get("hook", ""), clip.get("hook_on", True)
+    bar_main = bar_on and not tease                    # with a teaser, the bar is drawn over the whole video
 
     cw = reframe.crop_width(sw, sh, ASPECTS.get(fmt, (9, 16)))
     if layout.startswith("split") and fmt != "9:16":
@@ -168,8 +220,8 @@ def render_clip(pdir: Path, proj, clip, transcript, on_progress):
 
     # captions + hook text (over the seam for split screens)
     ass = cdir / "captions.ass"
-    has_ass = captions.build(words, start, end, W, H, clip.get("caption_style") or "Bold Pop", clip.get("hook", ""),
-                             clip.get("hook_on", True), ass, pos="mid" if layout.startswith("split") else None)
+    has_ass = captions.build(words, start, end, W, H, clip.get("caption_style") or "Bold Pop", hook_text,
+                             hook_on and not tease, ass, pos="mid" if layout.startswith("split") else None)
     if not has_ass and ass.exists():
         ass.unlink()
     post = "[v0]setsar=1"
@@ -177,7 +229,7 @@ def render_clip(pdir: Path, proj, clip, transcript, on_progress):
         rel = os.path.relpath(captions.FONTS, cdir).replace("\\", "/")
         post += f",ass=captions.ass:fontsdir='{rel}'"
     inputs = ["-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", src]
-    if bar_on:
+    if bar_main:
         bh_ = max(8, H // 160)
         inputs += ["-f", "lavfi", "-i", f"color=c=0x{bar_color}:s={W}x{bh_}:r={fps:.3f}"]
         post += f"[base];[base][1:v]overlay=x='-w+w*t/{dur:.3f}':y=H-h:eval=frame:shortest=1"
@@ -201,10 +253,21 @@ def render_clip(pdir: Path, proj, clip, transcript, on_progress):
 
     tmp = cdir / "clip.tmp.mp4"
     base = 0.3 if layout in ("auto", "split_two", "split_wide", "split_game") else 0.0
+    top = 0.86 if tease else 0.97
     media.run([*inputs, "-filter_complex", graph, *maps, "-t", f"{dur:.3f}",
                *media.video_codec_args(cfg.get("render.encoder", "auto")), "-r", f"{fps:.3f}",
                "-movflags", "+faststart", tmp.name, *extra_out],
-              cwd=cdir, duration=dur, on_progress=lambda f: on_progress(base + f * (0.97 - base), "Rendering..."))
+              cwd=cdir, duration=dur, on_progress=lambda f: on_progress(base + f * (top - base), "Rendering..."))
+    if tease:                                          # hook-first: best moment, flash, then the whole clip
+        on_progress(top, "Adding the hook-first opening...")
+        body = cdir / "clip.body.mp4"
+        os.replace(tmp, body)
+        try:
+            _cold_open(cdir, body.name, tmp.name, tease[0], tease[1], W, H, fps, dur, hook_text, hook_on, bar_on,
+                       bar_color, proj.get("has_audio", True),
+                       lambda f: on_progress(top + f * (0.97 - top), "Adding the hook-first opening..."))
+        finally:
+            body.unlink(missing_ok=True)
     final = cdir / "clip.mp4"
     for i in range(20):
         try:
@@ -228,5 +291,5 @@ def render_clip(pdir: Path, proj, clip, transcript, on_progress):
             log.warning("thumbnail for %s failed: %s", clip.get("id"), e)
     on_progress(1.0, "Done")
     clip.update(file=str(final), thumb=str(thumb), status="done", error="", layout_used=layout,
-                rendered=time.time(), **cover)
+                rendered=time.time(), tease_used=bool(tease), **cover)
     return clip

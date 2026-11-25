@@ -48,15 +48,19 @@ DEFAULTS = {
         "export_dir": str(Path.home() / "Videos"),   # only where the Download dialog starts
     },
     "new": {                           # last choices on the New clips page
-        "length": "30-60",
+        "length": "auto",              # auto = tight: the shortest length that holds the moment (15-45 s)
         "count": 6,
         "format": "9:16",
         "layout": "auto",
         "caption_style": "Bold Pop",
         "language": "auto",
         "hook_on": True,
+        "tease_on": True,               # hook-first opening: the clip's best 1-3 s plays first
         "thumbnail": True,              # make a thumbnail for every clip
         "focus": "",
+    },
+    "channel": {
+        "niche": "",                   # e.g. "English GTA 6 funny moments": steers moments, titles, hashtags
     },
     "keys": {
         "use_friday": True,

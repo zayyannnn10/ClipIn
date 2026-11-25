@@ -23,8 +23,9 @@ from core.log import log, setup  # noqa: E402
 
 JOB = re.sub(r"[^A-Za-z0-9_-]", "", os.environ.get("JOB_ID", "local"))[:40] or "local"
 PDIR = ROOT / "projects" / JOB
-OPTS = {"length": "30-60", "count": 6, "format": "9:16", "layout": "auto", "caption_style": "Bold Pop",
-        "hook_on": True, "zoom": False, "bar": False, "bar_color": "FFFFFF", "language": "auto", "focus": ""}
+OPTS = {"length": "auto", "count": 6, "format": "9:16", "layout": "auto", "caption_style": "Bold Pop",
+        "hook_on": True, "tease_on": True, "zoom": False, "bar": False, "bar_color": "FFFFFF", "language": "auto",
+        "focus": "", "niche": ""}
 CREATED = time.time()
 
 
@@ -147,12 +148,15 @@ def highlights():
     p = load()
     t = json.loads((PDIR / "transcript.json").read_text(encoding="utf-8"))
     o = p["options"]
-    clips, used = hl.find(t, p.get("title", ""), int(o.get("count", 6)), o.get("length", "30-60"),
-                          o.get("focus", ""), lambda f, m="": say(m) if m else None, heatmap=p.get("heatmap"))
+    clips, used = hl.find(t, p.get("title", ""), int(o.get("count", 6)), o.get("length", "auto"),
+                          o.get("focus", ""), lambda f, m="": say(m) if m else None, heatmap=p.get("heatmap"),
+                          niche=o.get("niche", ""))
     for c in clips:
         c.update(status="queued", layout=o.get("layout", "auto"), caption_style=o.get("caption_style", "Bold Pop"),
                  hook_on=bool(o.get("hook_on", True)))
     p["clips"], p["ai_used"] = clips, used
+    fits = [c["fit"] for c in clips if c.get("fit") is not None]
+    p["niche"], p["niche_fit"] = o.get("niche", ""), (round(sum(fits) / len(fits)) if fits else None)
     save(p)
     say(f"{len(clips)} moments picked by {used}")
     partial(p, f"Picked {len(clips)} moments — making the clips")
@@ -191,7 +195,7 @@ def render():
             say(f"  failed: {e}")
             continue
         try:                                       # AI title, description and Shorts hashtags
-            c["yt"] = metadata.generate(c, t, p.get("title", ""))
+            c["yt"] = metadata.generate(c, t, p.get("title", ""), p.get("niche", ""))
         except Exception as e:
             say(f"  no AI hashtags: {e}")
         save(p)

@@ -20,8 +20,11 @@ def clean_tag(t):
 
 def generate(clip, transcript, video_title="", channel_hint=""):
     text = _clip_text(clip, transcript)[:4000]
+    niche = (channel_hint or "").strip()
+    niche_line = (f"\nThe channel's niche: {niche}. Write for that audience and keep the broad hashtags and tags "
+                  f"the same niche every time, so YouTube learns who to show the channel to.\n" if niche else "")
     prompt = f"""Write YouTube Shorts upload details for this clip.
-
+{niche_line}
 Original long video: "{video_title}"
 Clip title idea: "{clip.get('title', '')}"
 Clip hook: "{clip.get('hook', '')}"

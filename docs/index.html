@@ -71,6 +71,7 @@
       <div id="captionGrid" class="cap-grid"></div>
       <div class="toggles">
         <label class="tog"><input type="checkbox" id="opt-hook"><span>Hook text</span></label>
+        <label class="tog"><input type="checkbox" id="opt-tease"><span>Hook-first</span></label>
         <label class="tog"><input type="checkbox" id="opt-zoom"><span>Zoom cuts</span></label>
         <label class="tog"><input type="checkbox" id="opt-bar"><span>Progress bar</span></label>
       </div>
@@ -98,6 +99,12 @@
   <!-- SETTINGS -->
   <section id="tab-settings" class="tab hidden">
     <h2>Settings</h2>
+    <div class="card">
+      <label class="field-label" for="niche">Channel niche</label>
+      <input id="niche" type="text" placeholder="e.g. English GTA 6 funny moments">
+      <p class="muted small">One topic, one language. Moments, hooks, titles and hashtags are made for this
+        audience. Leave empty to clip anything.</p>
+    </div>
     <div class="card">
       <div class="row"><span>Cloud</span><b id="setRepo"></b></div>
       <div class="row"><span>Status</span><b id="setStatus">…</b></div>

@@ -1,7 +1,7 @@
 /* ClipIn phone app. Talks only to GitHub: starts a cloud run with the link, follows its steps for live
    progress, and shows the finished clips from the `clips` branch. No AI keys on the phone. */
 'use strict';
-const VERSION = '1.7.0';
+const VERSION = '1.8.0';
 const $ = s => document.querySelector(s);
 const store = {
   get(k, d) { try { const v = JSON.parse(localStorage.getItem('clipin.' + k)); return v ?? d; } catch { return d; } },
@@ -25,10 +25,10 @@ const TEMPLATES = [
   { id: 'wide', name: 'YouTube Wide', desc: '16:9 for normal videos', format: '16:9', layout: 'fit_black', caption_style: 'Clean', hook_on: false },
 ];
 // format and layout are not in TPL_BASE: a caption template keeps the framing you picked
-const TPL_BASE = { caption_style: 'Bold Pop', hook_on: true, zoom: false, bar: false, bar_color: 'FFFFFF' };
+const TPL_BASE = { caption_style: 'Bold Pop', hook_on: true, tease_on: true, zoom: false, bar: false, bar_color: 'FFFFFF' };
 const CAPTIONS = ['Bold Pop', 'Two Tone', 'One Word', 'Neon', 'Fire', 'Ice', 'Rainbow', 'Pastel', 'Karaoke', 'Boxed',
   'Typewriter', 'Clean', 'Subtitle', 'None'];
-const LENGTHS = [['15-30', '15–30 s'], ['30-60', '30–60 s'], ['60-90', '60–90 s']];
+const LENGTHS = [['auto', 'Auto'], ['15-30', '15–30 s'], ['30-60', '30–60 s'], ['60-90', '60–90 s']];
 const COUNTS = [[3, '3'], [6, '6'], [9, '9'], [12, '12'], [20, '20'], [30, '30'], [40, '40']];
 const FORMATS = [['9:16', '9:16'], ['1:1', '1:1'], ['16:9', '16:9']];
 const LAYOUTS = [['auto', 'Follow'], ['fit', 'Blur'], ['fit_big', 'Big'], ['split_two', 'Split'],
@@ -50,9 +50,12 @@ const slug = n => n.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, 
 const capImg = n => `captions/${slug(n)}.png`;
 
 let cfg = store.get('cfg', null);           // {o, r, t, priv, branch}
-let opts = store.get('opts', null) || { template: 'viral', length: '30-60', count: 6, language: 'auto', focus: '',
+let opts = store.get('opts', null) || { template: 'viral', length: 'auto', count: 6, language: 'auto', focus: '',
   format: '9:16', layout: 'auto', ...TPL_BASE, ...TEMPLATES[0] };
 delete opts.id; delete opts.name; delete opts.desc;
+if (!store.get('hooks17', false)) {          // 1.7: tight clips with a hook-first opening by default
+  opts.length = 'auto'; opts.tease_on = true; store.set('opts', opts); store.set('hooks17', true);
+}
 let pending = store.get('pending', []);     // jobs started from this phone and not finished yet
 let index = store.get('index', []);         // finished jobs (from the clips branch)
 const results = store.get('results', {});   // job -> result.json (finished results never change)
@@ -154,6 +157,7 @@ function drawOptions() {
   $('#captionGrid').innerHTML = CAPTIONS.map(n => `<div class="cap ${opts.caption_style === n ? 'on' : ''}" data-n="${esc(n)}">
     ${n === 'None' ? '<div style="aspect-ratio:16/10;display:flex;align-items:center;justify-content:center">—</div>' : `<img src="${capImg(n)}" alt="" loading="lazy">`}${esc(n === 'None' ? 'No captions' : n)}</div>`).join('');
   $('#opt-hook').checked = !!opts.hook_on; $('#opt-zoom').checked = !!opts.zoom; $('#opt-bar').checked = !!opts.bar;
+  $('#opt-tease').checked = opts.tease_on !== false;
   $('#opt-lang').innerHTML = LANGS.map(([v, t]) => `<option value="${v}" ${opts.language === v ? 'selected' : ''}>${t}</option>`).join('');
   $('#opt-focus').value = opts.focus || '';
 }
@@ -196,10 +200,12 @@ function wireOptions() {
     const c = e.target.closest('.cap'); if (!c) return;
     opts.caption_style = c.dataset.n; saveOpts(); custom(); drawOptions();
   };
-  for (const [id, key] of [['#opt-hook', 'hook_on'], ['#opt-zoom', 'zoom'], ['#opt-bar', 'bar']])
+  for (const [id, key] of [['#opt-hook', 'hook_on'], ['#opt-tease', 'tease_on'], ['#opt-zoom', 'zoom'], ['#opt-bar', 'bar']])
     $(id).onchange = e => { opts[key] = e.target.checked; saveOpts(); custom(); };
   $('#opt-lang').onchange = e => { opts.language = e.target.value; saveOpts(); };
   $('#opt-focus').oninput = e => { opts.focus = e.target.value; saveOpts(); };
+  $('#niche').value = store.get('niche', '');
+  $('#niche').oninput = e => store.set('niche', e.target.value);
   $('#pasteBtn').onclick = async () => {
     try { const t = (await navigator.clipboard.readText()).trim(); if (t) { $('#url').value = t; drawLayouts(); } else toast('Clipboard is empty'); }
     catch { toast('Long-press the box and tap Paste'); $('#url').focus(); }
@@ -214,8 +220,9 @@ async function start() {
   if (pending.some(p => p.url === url && Date.now() - p.created < 60e3)) { toast('Already making clips from this link'); showTab('clips'); return; }
   const job = 'j' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const payload = { url, length: opts.length, count: opts.count, format: opts.format, layout: opts.layout,
-    caption_style: opts.caption_style, hook_on: opts.hook_on, zoom: opts.zoom, bar: opts.bar, bar_color: opts.bar_color,
-    language: opts.language, focus: (opts.focus || '').trim(), template: opts.template };
+    caption_style: opts.caption_style, hook_on: opts.hook_on, tease_on: opts.tease_on !== false, zoom: opts.zoom,
+    bar: opts.bar, bar_color: opts.bar_color, language: opts.language, focus: (opts.focus || '').trim(),
+    niche: String(store.get('niche', '')).trim(), template: opts.template };
   $('#goBtn').disabled = true; setMsg(msg, 'Sending to the cloud...');
   try {
     await gh(`${repo()}/actions/workflows/clip.yml/dispatches`, { method: 'POST',
